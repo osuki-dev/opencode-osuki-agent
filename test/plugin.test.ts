@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import type { Context } from "@opencode/plugin/effect/plugin"
-import { Effect, Schema, Stream } from "effect"
+import { Effect, PubSub, Schema, Stream } from "effect"
 import plugin from "../src/index.ts"
 
 type Hook = (event: Record<string, unknown>) => Effect.Effect<void, unknown>
@@ -11,13 +11,20 @@ type Tool = {
 }
 
 const makeHarness = Effect.fn("test.makePluginHarness")(function* (
-  options: { credentials?: boolean; brokenLookup?: boolean } = {}
+  options: {
+    credentials?: boolean
+    brokenLookup?: boolean
+    storage?: Map<string, unknown>
+    events?: PubSub.PubSub<unknown>
+  } = {}
 ) {
   const permissionHooks = new Map<string, Hook[]>()
   const toolHooks = new Map<string, Hook[]>()
   const sessionHooks = new Map<string, Hook[]>()
   const tools = new Map<string, Tool>()
-  const storage = new Map<string, unknown>()
+  const storage = options.storage ?? new Map<string, unknown>()
+  const interrupts: string[] = []
+  const displayAgent = { id: "osuki", name: "osuki", model: { id: "user-selected-model" } }
   const selectedAgents: string[] = []
   const model = { providerID: "openai", id: "configured-model", variant: "high" }
   const registerHook = (registry: Map<string, Hook[]>) => (name: string, hook: Hook) =>
@@ -38,7 +45,7 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
           storage.set(key, value)
         })
     },
-    event: { subscribe: () => Stream.never },
+    event: { subscribe: () => (options.events ? Stream.fromPubSub(options.events) : Stream.never) },
     integration: {
       connection: {
         active: () => Effect.succeed(options.credentials ? "opencode-key" : undefined),
@@ -46,6 +53,17 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
       }
     },
     agent: {
+      transform: (
+        transform: (editor: { update(id: string, fn: (agent: typeof displayAgent) => void): void }) => void
+      ) =>
+        Effect.sync(() => {
+          transform({
+            update: (id, fn) => {
+              if (id === displayAgent.id) fn(displayAgent)
+            }
+          })
+          return { dispose: Effect.void }
+        }),
       get: ({ agentID }: { agentID: string }) =>
         Effect.sync(() => {
           selectedAgents.push(agentID)
@@ -54,6 +72,11 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
       list: () => Effect.succeed({ data: [{ id: "osuki-worker-quick", mode: "subagent", model }] })
     },
     session: {
+      interrupt: ({ sessionID }: { sessionID: string }) =>
+        Effect.sync(() => {
+          interrupts.push(sessionID)
+          return { interrupted: true }
+        }),
       hook: registerHook(sessionHooks),
       get: ({ sessionID }: { sessionID: string }) =>
         options.brokenLookup
@@ -85,11 +108,14 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     Effect.forEach(registry.get(name) ?? [], (hook) => hook(event), { discard: true })
   return {
     storage,
+    interrupts,
+    displayAgent,
     tools,
     model,
     selectedAgents,
     permission: (event: Record<string, unknown>) => runHooks(permissionHooks, "evaluate", event),
     before: (event: Record<string, unknown>) => runHooks(toolHooks, "execute.before", event),
+    after: (event: Record<string, unknown>) => runHooks(toolHooks, "execute.after", event),
     context: (event: Record<string, unknown>) => runHooks(sessionHooks, "context", event),
     call: (name: string, input: unknown, agent = "osuki") =>
       tools.get(name)!.execute(input, { sessionID: "root", agent }),
@@ -485,4 +511,220 @@ test("Jev decision rewrites native dispatch and records the configured agent mod
   } finally {
     fetch.mockRestore()
   }
+})
+
+test("Osuki changes only the display name, not the agent ID or configured model", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        expect(harness.displayAgent).toEqual({ id: "osuki", name: "Osuki", model: { id: "user-selected-model" } })
+      })
+    )
+  )
+})
+
+test("follow-up questions preserve workflow; additions persist and completion requires resolution", async () => {
+  const questions: string[][] = []
+  let intent = "question"
+  const fetch = spyOn(globalThis, "fetch").mockImplementation((async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
+    questions.push(Object.keys(request.questions))
+    return Response.json({
+      answers: Object.fromEntries(
+        Object.entries(request.questions as Record<string, { criteria: Record<string, string> }>).map(
+          ([id, question]) => {
+            const choice = id === "message" ? intent : "quick"
+            return [
+              id,
+              {
+                type: "choice",
+                choice,
+                confidence: 0.95,
+                probabilities: Object.fromEntries(
+                  Object.keys(question.criteria).map((key) => [key, key === choice ? 1 : 0])
+                )
+              }
+            ]
+          }
+        )
+      )
+    })
+  }) as typeof globalThis.fetch)
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ credentials: true })
+          const context = (text: string) => ({
+            sessionID: "root",
+            agent: "osuki",
+            model: harness.model,
+            tools: {},
+            system: [] as { text: string }[],
+            messages: [{ role: "user", content: [{ type: "text", text }] }]
+          })
+          yield* harness.context(context("Remove the border"))
+          yield* harness.call("osuki_work", { action: "start", objective: "Remove the border" })
+          const question = context("How is it going?")
+          yield* harness.context(question)
+          yield* harness.context(context("How is it going?"))
+          expect(questions).toEqual([["complexity"], ["message"]])
+          expect(question.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
+          let work = JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content)
+          expect(work.objective).toBe("Remove the border")
+          expect(work.pending).toEqual([])
+          expect(harness.interrupts).toEqual([])
+          for (const kind of ["amend", "independent", "conflict", "cancel"]) {
+            intent = kind
+            yield* harness.context(context(`Follow-up ${kind}`))
+          }
+          work = JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content)
+          expect(work.pending.map((item: { intent: string }) => item.intent)).toEqual([
+            "amend",
+            "independent",
+            "conflict",
+            "cancel"
+          ])
+          expect(work.status).toBe("active")
+          expect(harness.interrupts).toEqual([]) // Advice never performs a cancellation.
+          expect(
+            yield* harness
+              .call("osuki_work", { action: "complete", revision: 0, evidence: "Inspected diff" })
+              .pipe(Effect.isFailure)
+          ).toBe(true)
+          yield* harness.call("osuki_work", {
+            action: "checkpoint",
+            revision: 0,
+            objective: "Reconciled objective",
+            resolved: work.pending.map((item: { id: string }) => item.id),
+            evidence: "User clarified the requirements; all additions incorporated."
+          })
+          expect(
+            yield* harness
+              .call("osuki_work", { action: "complete", revision: 0, evidence: "Stale" })
+              .pipe(Effect.isFailure)
+          ).toBe(true)
+          yield* harness.call("osuki_work", {
+            action: "complete",
+            revision: 1,
+            evidence: "Inspected integrated diff and relevant checks passed."
+          })
+          const reopened = yield* makeHarness({ storage: harness.storage })
+          expect(JSON.parse((yield* reopened.call("osuki_work", { action: "status" })).content).status).toBe(
+            "completed"
+          )
+        })
+      )
+    )
+  } finally {
+    fetch.mockRestore()
+  }
+})
+
+test("work records capture native child revisions, stop scoped children and reject corrupt state", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        yield* harness.call("osuki_work", { action: "start", objective: "Build feature" })
+        const event = {
+          id: "call-one",
+          sessionID: "root",
+          agent: "osuki",
+          tool: "subagent",
+          input: { agent: "general", description: "Implement feature", prompt: "Build feature", background: true }
+        }
+        yield* harness.before(event)
+        yield* harness.call("osuki_work", {
+          action: "checkpoint",
+          revision: 0,
+          objective: "Build revised feature",
+          evidence: "Accepted user clarification."
+        })
+        yield* harness.after({
+          ...event,
+          status: "completed",
+          result: { output: { sessionID: "worker", status: "running" } }
+        })
+        let work = JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content)
+        expect(work.workers[0].revision).toBe(0)
+        expect(work.revision).toBe(1)
+        yield* harness.call("osuki_work", { action: "pause", revision: 1, evidence: "User requested a pause." })
+        expect(harness.interrupts).toEqual(["worker"])
+        const reloaded = yield* makeHarness({ storage: harness.storage })
+        work = JSON.parse((yield* reloaded.call("osuki_work", { action: "status" })).content)
+        expect(work.status).toBe("paused")
+        expect(reloaded.interrupts).toEqual([])
+        expect(yield* harness.call("osuki_work", { action: "status" }, "general").pipe(Effect.isFailure)).toBe(true)
+        harness.storage.set("work:root", { revision: "invalid" })
+        expect(yield* harness.call("osuki_work", { action: "status" }).pipe(Effect.isFailure)).toBe(true)
+      })
+    )
+  )
+})
+
+test("native user interruptions pause work but superseded turns do not", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const events = yield* PubSub.unbounded<unknown>()
+        const harness = yield* makeHarness({ events })
+        yield* harness.call("osuki_work", { action: "start", objective: "Build feature" })
+        yield* PubSub.publish(events, {
+          type: "session.execution.interrupted",
+          data: { sessionID: "root", reason: "superseded" }
+        })
+        yield* Effect.sleep("5 millis")
+        expect(JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content).status).toBe("active")
+        yield* PubSub.publish(events, {
+          type: "session.execution.interrupted",
+          data: { sessionID: "root", reason: "user" }
+        })
+        yield* Effect.sleep("5 millis")
+        expect(JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content).status).toBe("paused")
+        expect(harness.interrupts).toEqual([])
+      })
+    )
+  )
+})
+
+test("active goals retain their own checkpoints instead of creating a second work record", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        const goal = {
+          id: "existing-goal",
+          sessionID: "root",
+          objective: "Existing goal",
+          status: "active",
+          revision: 0,
+          acceptance: [],
+          receipts: [],
+          processed: [],
+          rounds: 0
+        }
+        harness.storage.set("goal:root", goal)
+        const event = {
+          id: "goal-call",
+          sessionID: "root",
+          agent: "osuki",
+          tool: "subagent",
+          input: { agent: "plan", description: "Plan", prompt: "Plan the goal" }
+        }
+        // The first read reconciles a persisted goal after plugin startup.
+        yield* harness.before(event)
+        harness.storage.delete("work:root")
+        harness.storage.set("goal:root", { ...goal, status: "active" })
+        yield* harness.before({ ...event, id: "active-goal-call" })
+        expect(harness.storage.has("work:root")).toBe(false)
+        expect(
+          yield* harness
+            .call("osuki_work", { action: "start", objective: "Conflicting objective" })
+            .pipe(Effect.isFailure)
+        ).toBe(true)
+      })
+    )
+  )
 })

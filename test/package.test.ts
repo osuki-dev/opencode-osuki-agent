@@ -34,4 +34,5 @@ test("package exports the built plugin and retains its workflow assets", async (
   const workflow = new URL("../skills/osuki-workflow/SKILL.md", entry)
   expect(await Bun.file(workflow).exists()).toBe(true)
   expect(await Bun.file(workflow).text()).toContain("/osuki-goal")
+  expect(await Bun.file(new URL("./references/continuity.md", workflow)).exists()).toBe(true)
 })
