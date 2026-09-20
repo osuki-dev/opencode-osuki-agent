@@ -10,12 +10,23 @@ const AgentMappings = Schema.Struct({
   standard: Schema.optional(Schema.NonEmptyString),
   deep: Schema.optional(Schema.NonEmptyString)
 })
-const JevOptions = Schema.Struct({
+const JevCommon = {
   model: Schema.optional(Schema.NonEmptyString),
-  endpoint: Schema.optional(Schema.Literal("https://opencode.ai/zen/v1/systemone")),
   timeoutMs: Schema.optional(PositiveInt),
   cooldownMs: Schema.optional(PositiveInt)
-})
+}
+const JevOptions = Schema.Union([
+  Schema.Struct({
+    ...JevCommon,
+    provider: Schema.optional(Schema.Literal("opencode")),
+    endpoint: Schema.optional(Schema.Literal("https://opencode.ai/zen/v1/systemone"))
+  }),
+  Schema.Struct({
+    ...JevCommon,
+    provider: Schema.Literal("typesafe"),
+    endpoint: Schema.optional(Schema.Literal("https://api.typesafe.ai/v1/systemone"))
+  })
+])
 const RoutingOptions = Schema.Struct({
   confidence: Schema.optional(Probability),
   toolConfidence: Schema.optional(Probability),
@@ -42,8 +53,12 @@ export const parseConfig = Effect.fn("osuki.parseConfig")(function* (input: unkn
       deep: options.agents?.deep ?? "osuki-worker-deep"
     },
     jev: {
-      model: options.jev?.model ?? "jev-1.13-free",
-      endpoint: options.jev?.endpoint ?? "https://opencode.ai/zen/v1/systemone",
+      provider: options.jev?.provider ?? "opencode",
+      model: options.jev?.model ?? (options.jev?.provider === "typesafe" ? "jev-latest" : "jev-1.13-free"),
+      endpoint:
+        options.jev?.provider === "typesafe"
+          ? "https://api.typesafe.ai/v1/systemone"
+          : "https://opencode.ai/zen/v1/systemone",
       timeoutMs: options.jev?.timeoutMs ?? 2500,
       cooldownMs: options.jev?.cooldownMs ?? 60_000
     },

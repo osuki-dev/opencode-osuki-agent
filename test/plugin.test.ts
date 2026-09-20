@@ -81,6 +81,8 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     permission: (event: Record<string, unknown>) => runHooks(permissionHooks, "evaluate", event),
     before: (event: Record<string, unknown>) => runHooks(toolHooks, "execute.before", event),
     context: (event: Record<string, unknown>) => runHooks(sessionHooks, "context", event),
+    call: (name: string, input: unknown, agent = "osuki") =>
+      tools.get(name)!.execute(input, { sessionID: "root", agent }),
     status: () => tools.get("osuki_status")!.execute({}, { sessionID: "root", agent: "osuki" })
   }
 })
@@ -190,6 +192,159 @@ test("ancestry lookup failure aborts enforcement instead of allowing the operati
         const exit = yield* harness.permission(event).pipe(Effect.exit)
         expect(exit._tag).toBe("Failure")
         expect(event.effect).toBe("ask")
+      })
+    )
+  )
+})
+
+test("initial requests batch workflow and tool routing, cache decisions, and reclassify new requests", async () => {
+  const questionSets: string[][] = []
+  const respond = async (_url: string | URL | Request, init?: RequestInit) => {
+    const input = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
+    questionSets.push(Object.keys(input.questions))
+    const answers = Object.fromEntries(
+      Object.entries(input.questions).map(([id, raw]) => {
+        const question = raw as { criteria: Record<string, string> }
+        const keys = Object.keys(question.criteria)
+        const choice = id === "complexity" ? (input.state.includes("architecture") ? "deep" : "quick") : "read"
+        return [
+          id,
+          {
+            type: "choice",
+            choice,
+            confidence: 0.95,
+            probabilities: Object.fromEntries(keys.map((key) => [key, key === choice ? 1 : 0]))
+          }
+        ]
+      })
+    )
+    return Response.json({ answers })
+  }
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(respond as typeof globalThis.fetch)
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ credentials: true })
+          const event = (text: string, tools: Record<string, { description: string }> = {}) => ({
+            sessionID: "root",
+            agent: "osuki",
+            model: harness.model,
+            tools,
+            system: [] as { type: string; text: string }[],
+            messages: [{ role: "user", content: [{ type: "text", text }] }]
+          })
+          const first = event(
+            "Remove the border",
+            Object.fromEntries(
+              ["read", "write", "edit", "shell", "search", "subagent"].map((name) => [name, { description: name }])
+            )
+          )
+          yield* harness.context(first)
+          expect(questionSets[0]).toEqual(["complexity", "next"])
+          expect(first.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
+          const same = event("Remove the border")
+          yield* harness.context(same)
+          expect(questionSets).toHaveLength(1)
+          expect(same.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
+          const changed = event("Redesign the authentication architecture")
+          yield* harness.context(changed)
+          expect(questionSets[1]).toEqual(["complexity"])
+          expect(changed.system.some((part) => part.text.includes('"planning":"required"'))).toBe(true)
+        })
+      )
+    )
+  } finally {
+    fetch.mockRestore()
+  }
+})
+
+test("lightweight review follows workflow eligibility and risk reassessment updates cached context", async () => {
+  const respond = async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
+    const risky = String(request.state).includes("security change")
+    const choices: Record<string, string> = {
+      complexity: risky ? "deep" : "quick",
+      scope: "bounded",
+      correctness: "satisfied",
+      validation: "sufficient"
+    }
+    return Response.json({
+      answers: Object.fromEntries(
+        Object.entries(request.questions as Record<string, { criteria: Record<string, string> }>).map(
+          ([id, question]) => [
+            id,
+            {
+              type: "choice",
+              choice: choices[id],
+              confidence: 0.95,
+              probabilities: Object.fromEntries(
+                Object.keys(question.criteria).map((key) => [key, key === choices[id] ? 1 : 0])
+              )
+            }
+          ]
+        )
+      )
+    })
+  }
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(respond as typeof globalThis.fetch)
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ credentials: true })
+          const input = {
+            task: "Remove border",
+            diff: "@@ -1 +1 @@\n-border: solid;\n+border: none;",
+            context: "Only the card border changes",
+            validation: [{ check: "Visual inspection", result: "passed", evidence: "No border; layout unchanged" }]
+          }
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("reviewer-required")
+          const event = () => ({
+            sessionID: "root",
+            agent: "osuki",
+            model: harness.model,
+            tools: {},
+            system: [] as { text: string }[],
+            messages: [{ role: "user", content: [{ type: "text", text: "Remove border" }] }]
+          })
+          yield* harness.context(event())
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("lightweight-passed")
+          const denied = yield* harness.call("osuki_review", input, "general").pipe(Effect.exit)
+          expect(denied._tag).toBe("Failure")
+          yield* harness.call("osuki_route", { role: "implement", task: "Discovered security change" })
+          const refreshed = event()
+          yield* harness.context(refreshed)
+          expect(refreshed.system.some((part) => part.text.includes('"planning":"required"'))).toBe(true)
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("reviewer-required")
+          expect(fetch).toHaveBeenCalledTimes(3)
+        })
+      )
+    )
+  } finally {
+    fetch.mockRestore()
+  }
+})
+
+test("initial workflow falls back to planning when Jev has no credential", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        const event = {
+          sessionID: "root",
+          agent: "osuki",
+          model: harness.model,
+          tools: {},
+          system: [] as { type: string; text: string }[],
+          messages: [{ role: "user", content: [{ type: "text", text: "Remove a border" }] }]
+        }
+        yield* harness.context(event)
+        expect(
+          event.system.some(
+            (part) => part.text.includes('"planning":"required"') && part.text.includes('"source":"fallback"')
+          )
+        ).toBe(true)
       })
     )
   )

@@ -21,9 +21,29 @@ This repository configures the plugin locally. Select `osuki` in a new session. 
 
 Configure models exclusively through native `agents.<id>.model` entries in `opencode.json(c)`. The included subscription-model assignments are editable examples, not runtime constants. Built-in `explore`, `plan` and `general` are reused; `plan` needs `mode: "all"` for delegation. Custom agents supply the coordinator, quick/deep workers and independent reviewer.
 
-Jev automatically evaluates native subagent dispatch. Planning and review use the deep role policy; other tasks are classified by complexity. `osuki_route` is an optional preview. `osuki_status` reports actual role models, routing source and Jev health.
+Jev automatically evaluates each new user request before the coordinator responds, batching workflow classification with next-tool selection when the tool catalog is eligible. Workflow decisions are reused across tool turns; `osuki_route` can reassess changed scope or risk. A confident quick classification allows a bounded cosmetic or mechanical edit without a planner; normal, complex or uncertain work requires planning. Explicit planning requests, risky work and active goals retain planning. Jev also evaluates native worker dispatch; explicit planning and review roles retain their deep role policy. `osuki_status` reports actual role models, routing source and Jev health.
 
-Jev is a structured decision model, not a chat model. The small Effect HTTP adapter calls OpenCode Zen's official `/v1/systemone` endpoint using the active OpenCode integration credential. No TypeSafe SDK or separate credential store is required. The default is `jev-1.13-free`; failures, low confidence and rate limits use explicit deterministic fallbacks, never an automatic paid-model fallback.
+After validation, quick edits outside goal mode use `osuki_review`: one Jev request classifies actual diff scope, correctness and validation coverage. A confident `lightweight-passed` avoids a coding-model reviewer; risky, uncertain, unavailable, oversized or insufficiently validated changes require the configured independent reviewer. Supply the complete unified diff, original task, surrounding context and concrete check results. This is categorical triage, not numerical quality scoring or a prose bug report. The tool evaluates supplied evidence; it does not independently collect the repository diff or execute tests. Normal work and goals retain independent review, and Jev results never count as goal completion receipts.
+
+Jev is a structured decision model, not a chat model. The Effect HTTP client supports two explicit providers. No TypeSafe SDK, `.env` loader or separate credential store is used. Failures, low confidence and rate limits use deterministic routing fallbacks, never an automatic switch to another provider.
+
+- `opencode` (default): calls OpenCode Zen using the active native OpenCode integration credential. Its default model is `jev-1.13-free`.
+- `typesafe`: calls `https://api.typesafe.ai/v1/systemone` using `TYPESAFE_API_KEY` from the OpenCode server process environment. Its default model is `jev-latest`; API calls use your TypeSafe account and may incur charges.
+
+To select TypeSafe, set the following plugin options in your OpenCode configuration:
+
+```json
+{
+  "plugins": [
+    {
+      "package": "@osuki-dev/opencode-osuki-agent",
+      "options": { "jev": { "provider": "typesafe", "model": "jev-latest" } }
+    }
+  ]
+}
+```
+
+Inject `TYPESAFE_API_KEY` through your system or service environment before starting the OpenCode server. Reading it follows OpenCode's documented Effect `Config.redacted` pattern. A terminal export does not change an already-running background server; ensure its launch environment contains the variable and restart it after changes. Do not put the key in plugin options. Missing or empty keys produce `missing-typesafe-credential` in `osuki_status` and deterministic routing, not a request to another provider. Status probes also use the selected provider. Both modes allow a configurable model; endpoints are restricted to the matching service to prevent credential forwarding.
 
 Do not select Jev as the session's conversation model. Select `osuki` as the agent and a coding model such as the configured Sol coordinator model. Existing sessions retain their previously selected model; changing the default configuration does not switch them.
 
