@@ -1,22 +1,33 @@
 ---
 name: osuki-workflow
-description: Coordinate development or analysis with Osuki's Jev routing, native OpenCode subagents, project skills and persistent goal checkpoints.
+description: Apply Osuki's implementation, validation, review and persistent-goal workflow using native OpenCode tools.
 ---
 
-Use this workflow within the Osuki agent family. The user's requested scope and repository AGENTS.md remain authoritative.
+Use the injected role IDs and workflow decision; project instructions and user scope remain authoritative. This workflow does not authorize edits for questions or diagnosis.
 
-For a new development task outside goal mode, follow the automatic Jev workflow decision injected into system context before invoking a planner. No osuki_route call is needed for the initial decision; use it to reassess changed scope, risks or failed attempts. If planning is skip, inspect the target and make the small bounded change directly or through the suggested quick worker, then run focused validation. Do not create a formal plan or invoke the planning agent for this path; a specified border removal, spacing adjustment or typo fix is a typical candidate. If planning is required, use the configured planning role in the foreground to establish scope and acceptance criteria. Unavailable or low-confidence Jev defaults to planning. Explicit planning requests, security-sensitive or ambiguous work and active goals require planning regardless of a quick classification. Reassess when scope or risk changes, not before every tool call.
+## Implementation
 
-Native worker dispatch runs Jev automatically. Give workers explicit file ownership, relevant constraints and acceptance criteria. Independent workers may run concurrently; dependent work must wait. Run appropriate validation on both paths. For a confident quick edit outside goal mode, call osuki_review with the original task, complete actual unified diff (including new files), surrounding context, and concrete validation results. lightweight-passed permits handoff without a coding-model reviewer. reviewer-required, risky work, other workflow tiers and active goals require a fresh independent foreground reviewer. Never omit changes to obtain a lightweight pass, rescore unchanged evidence until it passes, or treat a previous pass as applying after more edits. Address actionable findings before handoff.
+With planning=skip, inspect and make the bounded change without a formal planner. With planning=required, obtain a foreground plan specifying affected paths, risks and acceptance checks. Explicit planning requests and active goals retain planning. Use osuki_route only to reassess changed scope or actual implementation risk.
 
-For analysis, inspect directly when the scope is small; delegate a bounded investigation to the configured read-only exploration role when useful. Automatic dispatch can select the planning role for more complex investigation. Do not create a development plan merely because analysis was classified as complex. Do not mutate code merely because diagnosis suggests a fix. Questions not needing investigation can be answered directly.
+Choose validation by impact. Documentation, cosmetic and mechanical edits usually need focused diff/context inspection; behavior changes need relevant regression checks. Run broad integration/E2E for cross-component risk or explicit project gates, not by default. Report unavailable required checks as blockers; do not silently waive policy or repair unrelated infrastructure.
 
-Use targeted search and reads, batch independent lookups, and reuse unchanged evidence. Prefer native tools and discovery over shell wrappers or invented APIs. Jev shortlists top-level tools; it does not choose every operation inside OpenCode Code Mode. Discover a missing necessary tool through the host rather than claiming it is unavailable. Do not repeatedly probe Jev health or reroute unchanged tasks. Routing confidence grants neither permission nor correctness.
+## Review
 
-Discover skills through OpenCode. Load only relevant ones, not the entire catalog. Read repository instructions first; use coding-standards for implementation, a review skill for review, and domain-specific skills when the task needs them. If working on the Osuki platform, use its installed osuki-plugin-development, osuki-product-composition or osuki-bundle skill according to the requested artifact. Check availability before naming a skill as a requirement. Children have fresh context: pass the relevant skill IDs and constraints, and tell them to load those skills themselves.
+For eligible quick edits, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
 
-Jev provides typed routing, tool candidates and review categories, not code, plans or prose explanations. Supply review evidence from an explicit baseline, including new files and relevant pre-existing changes without claiming ownership of them. Do not trim away risk to meet the lightweight context limit; escalate oversized or incomplete evidence to the configured reviewer. Investigate adverse categories before claiming a particular bug. Low confidence, errors and rate limits use deterministic role routing with the user's configured native models. Keep the user's explicit Jev provider choice; never switch providers automatically, and never use GPT-5.3 Codex or Spark. Use osuki_status when actual routing health needs inspection.
+- lightweight-passed: no coding-model reviewer is needed outside goals.
+- evidence-required: gather focused evidence or report a validation blocker.
+- changes-required: inspect the flagged issue, correct confirmed defects and recheck.
+- reviewer-required: use the configured independent foreground reviewer.
 
-When /osuki-goal is active, keep acceptance criteria aligned with the original objective. Persist concrete evidence with osuki_goal checkpoint, then obtain the independent review. Use osuki_goal status to obtain observed planner/reviewer IDs; completion requires those records and a passed reviewer verdict. Further edits invalidate the review. A final chat reply does not end a goal. Pause/cancel comes from the user; essential missing credentials, external dependencies or unavailable required validation must be reported as blocked rather than called complete.
+Do not retry unchanged evidence, escalate merely because infrastructure is unavailable, or treat a prior pass as covering later edits. Normal implementation and active goals retain independent review.
 
-Default permission is allow for developers, with deterministic dangerous-operation denies. Planning/review/analysis roles remain read-only. A denied action is not permission to try the same effect through another interpreter. No workflow grants extra authority to publish, deploy, spend money or message people.
+## Goals
+
+When /osuki-goal is active, retain acceptance criteria, obtain the native planner, implement, validate and checkpoint evidence before a fresh foreground reviewer. Use observed IDs from osuki_goal status; completion requires a matching passed report for the current revision. Later edits invalidate review. Jev results never substitute for receipts. Respect pause/cancel; report concrete blockers.
+
+## Tools and children
+
+Reuse native exploration, planning and worker roles. Give children scope, file ownership, relevant facts, available skills and expected evidence; they do not inherit the full conversation. Parallelize only independent work.
+
+Use targeted reads, reuse unchanged evidence and discover missing native capabilities. Jev narrows top-level tools, not every Code Mode operation. Probe routing health only when needed. No routing decision grants permissions, authorizes publication, or proves correctness.

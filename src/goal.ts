@@ -103,9 +103,16 @@ export function completionError(goal: Goal, plannerID: unknown, reviewerID: unkn
     return "Review report does not match the observed reviewer child session."
 }
 
-export const installGoals: (ctx: Context, config: RoutingConfig) => Effect.Effect<void, never, Scope.Scope> = Effect.fn(
-  "installGoals"
-)(function* (ctx: Context, config: RoutingConfig) {
+export const installGoals: (
+  ctx: Context,
+  config: RoutingConfig
+) => Effect.Effect<
+  {
+    active: (sessionID: string) => Effect.Effect<boolean>
+  },
+  never,
+  Scope.Scope
+> = Effect.fn("installGoals")(function* (ctx: Context, config: RoutingConfig) {
   const instructions = GOAL_INSTRUCTIONS.replaceAll("osuki-planner", config.agents.plan).replaceAll(
     "osuki-reviewer",
     config.agents.review
@@ -497,4 +504,11 @@ export const installGoals: (ctx: Context, config: RoutingConfig) => Effect.Effec
     Effect.catch(logFailure),
     Effect.forkScoped
   )
+  return {
+    active: (sessionID: string) =>
+      read(SessionID.make(sessionID)).pipe(
+        Effect.map((goal) => goal?.status === "active"),
+        Effect.orDie
+      )
+  }
 })

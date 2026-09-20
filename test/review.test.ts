@@ -47,7 +47,7 @@ test("a bounded validated diff batches review criteria and needs no coding-model
   expect(calls).toBe(1)
 })
 
-test("ineligible workflows, partial or oversized context, and failed validation escalate without a Jev call", async () => {
+test("only ineligible or oversized work escalates; missing and failed checks request evidence without a Jev call", async () => {
   const jev: JevClient = { evaluate: () => Effect.die("must not call"), status: () => Effect.die("unused") }
   const config = await Effect.runPromise(parseConfig({ agents: { review: "custom-reviewer" } }))
   for (const candidate of [
@@ -61,22 +61,68 @@ test("ineligible workflows, partial or oversized context, and failed validation 
     }
   ]) {
     const result = await Effect.runPromise(reviewChange(jev, candidate.value, config, candidate.eligible))
-    expect(result.outcome).toBe("reviewer-required")
-    expect("agent" in result && result.agent).toBe("custom-reviewer")
+    const escalates = !candidate.eligible || candidate.value.context.length >= 20_000
+    expect(result.outcome).toBe(escalates ? "reviewer-required" : "evidence-required")
+    expect("agent" in result ? result.agent : undefined).toBe(escalates ? "custom-reviewer" : undefined)
   }
 })
 
 test("missing, uncertain and adverse Jev answers never approve a lightweight review", async () => {
   const config = await Effect.runPromise(parseConfig({}))
-  for (const answers of [
+  const cases: (Answers | undefined)[] = [
     undefined,
     {},
     { ...passing(), scope: { ...passing().scope!, choice: "risky" } },
     { ...passing(), correctness: { ...passing().correctness!, choice: "regression" } },
     { ...passing(), validation: { ...passing().validation!, confidence: 0.1 } }
-  ]) {
+  ]
+  for (const answers of cases) {
     const jev: JevClient = { evaluate: () => Effect.succeed(answers), status: () => Effect.die("unused") }
     const result = await Effect.runPromise(reviewChange(jev, input, config, true))
-    expect(result.outcome).toBe("reviewer-required")
+    expect(result.outcome).not.toBe("lightweight-passed")
+    if (answers?.scope?.choice !== "risky") expect(result).not.toHaveProperty("agent")
   }
+})
+
+test("validation uncertainty and local findings do not invoke the expensive reviewer", async () => {
+  const config = await Effect.runPromise(parseConfig({}))
+  for (const [answers, outcome] of [
+    [{ ...passing(), validation: { ...passing().validation!, confidence: 0.66 } }, "evidence-required"],
+    [{ ...passing(), validation: { ...passing().validation!, choice: "failed" } }, "evidence-required"],
+    [{ ...passing(), correctness: { ...passing().correctness!, choice: "regression" } }, "changes-required"],
+    [{ ...passing(), scope: { ...passing().scope!, choice: "risky" } }, "reviewer-required"]
+  ] as const) {
+    const jev: JevClient = { evaluate: () => Effect.succeed(answers), status: () => Effect.die("unused") }
+    expect((await Effect.runPromise(reviewChange(jev, input, config, true))).outcome).toBe(outcome)
+  }
+})
+
+test("a small reviewed change with a blocked broad check remains a validation blocker, not a model escalation", async () => {
+  let calls = 0
+  const jev: JevClient = {
+    evaluate: () => {
+      calls++
+      return Effect.succeed(passing())
+    },
+    status: () => Effect.die("unused")
+  }
+  const config = await Effect.runPromise(parseConfig({}))
+  const result = await Effect.runPromise(
+    reviewChange(
+      jev,
+      {
+        ...input,
+        validation: [
+          ...input.validation,
+          { check: "Required integration suite", result: "unavailable", evidence: "Dependency service is unreachable" }
+        ]
+      },
+      config,
+      true
+    )
+  )
+  expect(calls).toBe(1)
+  expect(result.outcome).toBe("evidence-required")
+  expect(result).not.toHaveProperty("agent")
+  expect(result.goalReceipt).toBe(false)
 })
