@@ -17,6 +17,7 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
   const toolHooks = new Map<string, Hook[]>()
   const sessionHooks = new Map<string, Hook[]>()
   const tools = new Map<string, Tool>()
+  const storage = new Map<string, unknown>()
   const selectedAgents: string[] = []
   const model = { providerID: "openai", id: "configured-model", variant: "high" }
   const registerHook = (registry: Map<string, Hook[]>) => (name: string, hook: Hook) =>
@@ -30,7 +31,13 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     app: { version: "2.0.1" },
     command: { transform: noTransform },
     skill: { transform: noTransform, list: () => Effect.succeed({ data: [] }) },
-    storage: { get: () => Effect.succeed(undefined), set: () => Effect.void },
+    storage: {
+      get: (key: string) => Effect.succeed(storage.get(key)),
+      set: (key: string, value: unknown) =>
+        Effect.sync(() => {
+          storage.set(key, value)
+        })
+    },
     event: { subscribe: () => Stream.never },
     integration: {
       connection: {
@@ -77,6 +84,7 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
   const runHooks = (registry: Map<string, Hook[]>, name: string, event: Record<string, unknown>) =>
     Effect.forEach(registry.get(name) ?? [], (hook) => hook(event), { discard: true })
   return {
+    storage,
     tools,
     model,
     selectedAgents,
@@ -339,6 +347,44 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
           })
           yield* harness.context(event())
           expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("lightweight-passed")
+          const reviewer = () => ({
+            sessionID: "root",
+            agent: "osuki",
+            tool: "subagent",
+            input: {
+              agent: "osuki-reviewer",
+              description: "Review border change",
+              prompt: "Review the border-only change",
+              background: false
+            }
+          })
+          expect((yield* harness.before(reviewer()).pipe(Effect.exit))._tag).toBe("Failure")
+          const incomplete = {
+            ...input,
+            validation: [{ check: "E2E", result: "failed", evidence: "Emulator selection is ambiguous" }]
+          }
+          expect(JSON.parse((yield* harness.call("osuki_review", incomplete)).content).outcome).toBe(
+            "evidence-required"
+          )
+          expect((yield* harness.before(reviewer()).pipe(Effect.exit))._tag).toBe("Failure")
+          expect(harness.selectedAgents).toHaveLength(0)
+          const goal = {
+            id: "goal-test",
+            sessionID: "root",
+            objective: "Goal fixture",
+            status: "paused",
+            revision: 0,
+            acceptance: [],
+            receipts: [],
+            processed: [],
+            rounds: 0
+          }
+          harness.storage.set("goal:root", goal)
+          expect((yield* harness.before(reviewer()).pipe(Effect.exit))._tag).toBe("Failure")
+          harness.storage.set("goal:root", { ...goal, status: "active" })
+          yield* harness.before(reviewer())
+          expect(harness.selectedAgents).toEqual(["osuki-reviewer"])
+          harness.storage.clear()
           const denied = yield* harness.call("osuki_review", input, "general").pipe(Effect.exit)
           expect(denied._tag).toBe("Failure")
           yield* harness.call("osuki_route", { role: "implement", task: "Discovered security change" })
@@ -346,6 +392,8 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
           yield* harness.context(refreshed)
           expect(refreshed.system.some((part) => part.text.includes('"planning":"required"'))).toBe(true)
           expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("reviewer-required")
+          yield* harness.before(reviewer())
+          expect(harness.selectedAgents).toEqual(["osuki-reviewer", "osuki-reviewer"])
           expect(fetch).toHaveBeenCalledTimes(3)
         })
       )
