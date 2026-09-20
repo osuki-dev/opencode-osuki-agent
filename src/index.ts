@@ -8,6 +8,7 @@ import { dangerousShell, READ_ONLY_ACTIONS } from "./policy.ts"
 import { compactState, implementationWorkflow, routeTask, shortlist, ROUTE_QUESTIONS } from "./routing.ts"
 import type { Questions } from "./jev.ts"
 import { ReviewInput, reviewChange } from "./review.ts"
+import { toolInputSchema } from "./tool-schema.ts"
 import workflow from "../skills/osuki-workflow/SKILL.md" with { type: "text" }
 import { version } from "../package.json" with { type: "json" }
 
@@ -92,8 +93,11 @@ export default {
         name: "osuki_route",
         description:
           "Decide the implementation workflow before planning: planning=skip permits a quick edit without a planner; required means obtain a plan first. Also previews worker routing. Active goals still require a planner. Models come from OpenCode configuration.",
-        input: RouteInput,
-        execute: Effect.fn("osuki.route")(function* (input, tool) {
+        input: toolInputSchema(RouteInput),
+        execute: Effect.fn("osuki.route")(function* (raw, tool) {
+          const input = yield* Schema.decodeUnknownEffect(RouteInput)(raw).pipe(
+            Effect.mapError(() => new ToolFailure({ message: "Invalid routing input" }))
+          )
           if (!(yield* isManaged(tool.sessionID, tool.agent)))
             return yield* new ToolFailure({ message: "This tool belongs to an Osuki session" })
           const route = yield* routeTask(jev, input.task, input.role, config)
@@ -112,8 +116,11 @@ export default {
         name: "osuki_review",
         description:
           "Lightweight Jev review for a confident quick edit. Supply original task, complete unified diff, surrounding context, and actual validation evidence. reviewer-required means use the configured independent reviewer. Never replaces goal review receipts; rerun after further edits.",
-        input: ReviewInput,
-        execute: Effect.fn("osuki.review")(function* (input, tool) {
+        input: toolInputSchema(ReviewInput),
+        execute: Effect.fn("osuki.review")(function* (raw, tool) {
+          const input = yield* Schema.decodeUnknownEffect(ReviewInput)(raw).pipe(
+            Effect.mapError(() => new ToolFailure({ message: "Invalid review input" }))
+          )
           if (tool.agent !== config.coordinator)
             return yield* new ToolFailure({ message: "Only the Osuki coordinator may request lightweight review" })
           const decision = workflows.get(tool.sessionID)?.decision
@@ -130,8 +137,11 @@ export default {
         name: "osuki_status",
         description:
           "Inspect Jev health, actual agent model configuration, and skill IDs. probe=true calls the configured Jev provider, respecting cooldown. Never returns credentials.",
-        input: StatusInput,
-        execute: Effect.fn("osuki.status")(function* (input, tool) {
+        input: toolInputSchema(StatusInput),
+        execute: Effect.fn("osuki.status")(function* (raw, tool) {
+          const input = yield* Schema.decodeUnknownEffect(StatusInput)(raw).pipe(
+            Effect.mapError(() => new ToolFailure({ message: "Invalid status input" }))
+          )
           if (!(yield* isManaged(tool.sessionID, tool.agent)))
             return yield* new ToolFailure({ message: "This tool belongs to an Osuki session" })
           if (input.probe) yield* jev.evaluate({ task: "Find the README file" }, ROUTE_QUESTIONS)

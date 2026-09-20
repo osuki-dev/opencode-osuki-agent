@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, Option, PartitionedSemaphore, Schema, Stream, type Scope } from "effect"
 import type { RoutingConfig } from "./config.ts"
+import { toolInputSchema } from "./tool-schema.ts"
 
 export const GOAL_INSTRUCTIONS = `Continue active goals until their acceptance criteria are verified. Run osuki-planner as a foreground native subagent before implementation. Checkpoint with a nonempty acceptance list of {criterion,evidence}; retain every established criterion in subsequent checkpoints. Run tests before checkpointing. Start a fresh foreground osuki-reviewer child after the final checkpoint. Reviewers must use read-only inspection tools, not shell, and call osuki_review_report with verdict passed or changes_requested, unresolved findings, and concrete evidence. Complete with observed plannerCallID and reviewerCallID from osuki_goal status. Any subsequent edit, shell invocation, or worker dispatch invalidates review. Report blocked when essential input is unavailable. Only the user can resume paused or blocked goals. Three consecutive turns without new successful tool work or changed checkpoint evidence block the goal. A final assistant reply does not complete a goal.`
 
@@ -60,12 +61,6 @@ const ReviewInput = Schema.Struct({
   findings: StringList,
   evidence: StringList.check(Schema.isNonEmpty())
 })
-// Keep the host boundary JSON-only; validation stays in this runtime's Effect Schema.
-// OpenCode's CodeMode bridge must not interpret a plugin-local Effect AST.
-const toolInputSchema = (schema: Schema.Constraint) => {
-  const document = Schema.toJsonSchemaDocument(schema)
-  return { ...document.schema, $defs: document.definitions }
-}
 const GoalToolInput = toolInputSchema(GoalInput)
 const ReviewToolInput = toolInputSchema(ReviewInput)
 const decodeGoalInput = Schema.decodeUnknownEffect(GoalInput)
