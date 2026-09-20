@@ -304,7 +304,14 @@ export const installGoals: (
     })
   })
 
-  const bookkeepingTools = new Set(["execute", "osuki_goal", "osuki_review_report", "osuki_status", "osuki_route"])
+  const bookkeepingTools = new Set([
+    "execute",
+    "osuki_goal",
+    "osuki_review_report",
+    "osuki_status",
+    "osuki_route",
+    "osuki_work"
+  ])
   const readOnlyTools = new Set([
     "read",
     "glob",

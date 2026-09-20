@@ -75,6 +75,12 @@ Plugin options use OpenCode's native object-form registration:
 
 Tool optimization shortlists top-level tools only when Jev confidence is sufficient. Recovery and delegation tools remain available. OpenCode Code Mode and its internal tool catalog remain host-owned; this plugin does not claim to prune that inner catalog.
 
+## Follow-up messages
+
+The coordinator displays as **Osuki**; its configuration ID remains `osuki`. Outside goal mode, `osuki_work` preserves substantial objectives, requirement revisions, observed child session IDs and unresolved requests in native plugin storage. Jev classifies follow-ups without replacing the original complexity decision: questions, compatible additions, separate requests, conflicts, cancellation, or uncertainty. The coordinator forwards or schedules accepted work through native tools; classification itself does not interrupt, send messages or authorize edits.
+
+Background workers use OpenCode's native execution and completion notifications. Independent requests remain pending until ownership and dependencies are checked; conflicts need reconciliation. `osuki_work` pause/cancel interrupts recorded children using native controls, while state alone is never proof that a child is running. No separate inbox, database or memory service is added. Detailed follow-up procedures live in the workflow skill's on-demand continuity reference. Existing `/osuki-goal` checkpoints and receipts remain separate.
+
 ## Goals
 
 - `/osuki-goal <objective>` starts a persistent goal.

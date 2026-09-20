@@ -1,6 +1,6 @@
 ---
 name: osuki-workflow
-description: Apply Osuki's implementation, validation, review and persistent-goal workflow using native OpenCode tools.
+description: Apply Osuki's development, proportional review, follow-up coordination and goal workflow using native OpenCode tools.
 ---
 
 Use the injected role IDs and workflow decision; project instructions and user scope remain authoritative. This workflow does not authorize edits for questions or diagnosis.
@@ -29,5 +29,7 @@ When /osuki-goal is active, retain acceptance criteria, obtain the native planne
 ## Tools and children
 
 Reuse native exploration, planning and worker roles. Give children scope, file ownership, relevant facts, available skills and expected evidence; they do not inherit the full conversation. Parallelize only independent work.
+
+Outside goal mode, record substantial work with osuki_work start; tiny single-step edits need no task record. Use native background workers when the coordinator should remain available; required planner/reviewer receipts remain foreground. For follow-ups or resuming unfinished work, read [references/continuity.md](references/continuity.md). Complete the record after integrating results and resolving pending requests. Active goals use their existing checkpoints instead.
 
 Use targeted reads, reuse unchanged evidence and discover missing native capabilities. Jev narrows top-level tools, not every Code Mode operation. Probe routing health only when needed. No routing decision grants permissions, authorizes publication, or proves correctness.

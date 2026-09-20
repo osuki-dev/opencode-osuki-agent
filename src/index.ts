@@ -9,6 +9,7 @@ import { compactState, implementationWorkflow, routeTask, shortlist, ROUTE_QUEST
 import type { Questions } from "./jev.ts"
 import { ReviewInput, reviewChange } from "./review.ts"
 import { toolInputSchema } from "./tool-schema.ts"
+import { makeContinuity, messageKey, MESSAGE_QUESTIONS, unfinished } from "./continuity.ts"
 import workflow from "../skills/osuki-workflow/SKILL.md" with { type: "text" }
 import { version } from "../package.json" with { type: "json" }
 
@@ -39,12 +40,19 @@ export default {
       string,
       {
         task: string
+        revision?: number
         decision: ReturnType<typeof implementationWorkflow>
         review?: Effect.Success<ReturnType<typeof reviewChange>>["outcome"]
       }
     >()
     let lastTools: { before: number; after: number; mode: string } | undefined
     const goals = yield* installGoals(ctx, config)
+    yield* ctx.agent.transform((editor) => {
+      if (config.coordinator === "osuki")
+        editor.update(config.coordinator, (agent) => {
+          agent.name = Schema.String.pipe(Schema.brand("Agent.Name")).make("Osuki")
+        })
+    })
 
     const isManaged = Effect.fn("osuki.isManaged")(function* (sessionID: string, agent: string | undefined) {
       if (agent === config.coordinator) return true
@@ -166,6 +174,10 @@ export default {
               opencode: ctx.app.version,
               jev: yield* jev.status(),
               lastRoute: latestRoutes.get(tool.sessionID),
+              work: yield* continuity.read(tool.sessionID).pipe(
+                Effect.map((work) => (work ? continuity.summary(work) : undefined)),
+                Effect.orDie
+              ),
               toolRouting: lastTools,
               roles: config.agents,
               agents: agents.data
@@ -229,6 +241,7 @@ export default {
         if (latestRoutes.size > 256) latestRoutes.delete(latestRoutes.keys().next().value ?? "")
       })
     )
+    const continuity = yield* makeContinuity(ctx, config, (sessionID) => workflows.get(sessionID)?.task, goals.active)
     yield* ctx.session.hook(
       "context",
       Effect.fn("osuki.routeTools")(function* (event) {
@@ -252,10 +265,17 @@ export default {
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("\n")
-          .slice(-6000)
+        let work =
+          event.agent === config.coordinator ? yield* continuity.read(event.sessionID).pipe(Effect.orDie) : undefined
+        const hasWork = Boolean(unfinished(work)) && !(yield* goals.active(event.sessionID))
+        const messageChanged = hasWork && Boolean(task) && work?.lastMessage?.id !== messageKey(task ?? "")
+        const objective = hasWork ? work?.objective : task
         const cached = workflows.get(event.sessionID)
-        const classify = event.agent === config.coordinator && Boolean(task) && cached?.task !== task
+        if (hasWork && cached && cached.revision !== work?.revision)
+          workflows.set(event.sessionID, { ...cached, revision: work?.revision, review: undefined })
+        const classify = event.agent === config.coordinator && Boolean(objective) && cached?.task !== objective
         const questions: Questions = classify ? { ...ROUTE_QUESTIONS } : {}
+        if (messageChanged) Object.assign(questions, MESSAGE_QUESTIONS)
         if (routeTools)
           questions.next = {
             type: "choice",
@@ -267,16 +287,27 @@ export default {
           }
         const answers =
           Object.keys(questions).length > 0
-            ? yield* jev.evaluate({ messages: compactState(event.messages), task }, questions)
+            ? yield* jev.evaluate(
+                {
+                  messages: compactState(event.messages),
+                  task: objective,
+                  latestMessage: task,
+                  unfinishedWork: work ? continuity.summary(work) : undefined
+                },
+                questions
+              )
             : undefined
-        if (classify && task) {
+        if (messageChanged && task && work)
+          work = yield* continuity.record(event.sessionID, task, work.revision, answers?.message).pipe(Effect.orDie)
+        if (work && hasWork) event.system.push({ type: "text", text: continuity.context(work) })
+        if (classify && objective) {
           const decision = implementationWorkflow(answers?.complexity, config)
-          workflows.set(event.sessionID, { task, decision })
+          workflows.set(event.sessionID, { task: objective, decision, revision: work?.revision })
           if (workflows.size > 256) workflows.delete(workflows.keys().next().value ?? "")
           latestRoutes.set(event.sessionID, { ...decision, dispatch: "workflow" })
         }
         const workflow = workflows.get(event.sessionID)
-        if (event.agent === config.coordinator && workflow && workflow.task === task) {
+        if (event.agent === config.coordinator && workflow && workflow.task === objective) {
           event.system.push({
             type: "text",
             text: `Implementation workflow: ${JSON.stringify(workflow.decision)}. Latest review: ${workflow.review ?? "not-reviewed"}. skip means no planner, focused validation and osuki_review; required means foreground planning and independent review. evidence-required requests evidence or a blocker report, not a stronger reviewer; changes-required requests local investigation/fixes. Respect explicit project gates and active-goal receipts. Questions remain read-only. Reassess only actual scope/code risk, not unavailable test infrastructure.`
