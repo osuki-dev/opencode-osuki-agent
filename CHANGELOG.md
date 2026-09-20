@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.1.3
+
+### Patch Changes
+
+- [#5](https://github.com/osuki-dev/opencode-osuki-agent/pull/5) [`1d73da2`](https://github.com/osuki-dev/opencode-osuki-agent/commit/1d73da28202b9ed7a95a6e75b2fd753802969f4c) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Separate validation blockers and local review findings from genuine risk escalation. Use proportional validation prompts and prevent quick edits from invoking the independent reviewer solely because evidence is incomplete, while preserving explicit project gates and goal review requirements.
+
 ## 0.1.2
 
 ### Patch Changes
