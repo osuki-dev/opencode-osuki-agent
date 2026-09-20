@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
-import { Clock, Effect, Ref, Schema, Semaphore } from "effect"
+import { Clock, Config, Effect, Redacted, Ref, Schema, Semaphore } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { RoutingConfig } from "./config.ts"
 
@@ -60,6 +60,7 @@ export function redact(text: string): string {
 }
 
 export interface JevStatus {
+  readonly provider: "opencode" | "typesafe"
   readonly model: string
   readonly endpoint: string
   readonly calls: number
@@ -96,7 +97,7 @@ export const makeJevClient = Effect.fn("makeJevClient")(function* (
       const time = yield* now
       yield* Ref.update(state, (value) => ({
         ...value,
-        last: "missing-opencode-credential",
+        last: `missing-${config.provider}-credential`,
         retryAt: time + config.cooldownMs
       }))
       return undefined
@@ -105,7 +106,7 @@ export const makeJevClient = Effect.fn("makeJevClient")(function* (
     const payload = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(context)
     const outgoing = yield* HttpClientRequest.post(config.endpoint).pipe(
       HttpClientRequest.setHeaders(headers),
-      HttpClientRequest.bodyJson({ model: config.model, state: redact(payload).slice(0, 24_000), questions })
+      HttpClientRequest.bodyJson({ model: config.model, state: redact(payload).slice(-24_000), questions })
     )
     yield* Ref.update(state, (value) => ({ ...value, calls: value.calls + 1 }))
     const response = yield* http.execute(outgoing)
@@ -113,8 +114,28 @@ export const makeJevClient = Effect.fn("makeJevClient")(function* (
       const time = yield* now
       yield* Ref.update(state, (value) => {
         const failures = value.failures + 1
-        const delay = Math.min(config.cooldownMs * 5, config.cooldownMs * 2 ** Math.min(failures - 1, 5))
-        return { ...value, failures, last: `http-${response.status}`, retryAt: time + delay }
+        const transient = response.status === 408 || response.status === 429 || response.status >= 500
+        const backoff = Math.min(config.cooldownMs * 5, config.cooldownMs * 2 ** Math.min(failures - 1, 5))
+        const retryAfter = response.headers["retry-after"]
+        const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN
+        const retryMs =
+          Number.isFinite(seconds) && seconds >= 0
+            ? seconds * 1000
+            : retryAfter
+              ? Math.max(0, Date.parse(retryAfter) - time)
+              : 0
+        const delay = transient ? Math.max(backoff, Number.isFinite(retryMs) ? retryMs : 0) : config.cooldownMs * 5
+        const reason =
+          response.status === 401 || response.status === 403
+            ? "authentication"
+            : response.status === 422 || response.status === 400
+              ? "invalid-request"
+              : response.status === 429
+                ? "rate-limited"
+                : response.status === 529
+                  ? "overloaded"
+                  : "http-error"
+        return { ...value, failures, last: `${reason}-${response.status}`, retryAt: time + delay }
       })
       return undefined
     }
@@ -156,6 +177,7 @@ export const makeJevClient = Effect.fn("makeJevClient")(function* (
     const value = yield* Ref.get(state)
     const time = yield* now
     return {
+      provider: config.provider,
       model: config.model,
       endpoint: config.endpoint,
       calls: value.calls,
@@ -167,13 +189,20 @@ export const makeJevClient = Effect.fn("makeJevClient")(function* (
   return { evaluate, status }
 })
 
-export const makeJev = Effect.fn("makeJev")(function* (ctx: Context, config: RoutingConfig["jev"]) {
-  const credentials = Effect.gen(function* () {
+export const jevCredentials = (ctx: Pick<Context, "integration">, config: RoutingConfig["jev"]) =>
+  Effect.gen(function* () {
+    if (config.provider === "typesafe") {
+      const secret = yield* Config.redacted("TYPESAFE_API_KEY").pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const key = secret && Redacted.value(secret).trim()
+      return key ? { Authorization: `Bearer ${key}` } : undefined
+    }
     const active = yield* ctx.integration.connection.active("opencode")
     const credential = active && (yield* ctx.integration.connection.resolve(active))
     // The free endpoint accepts the OpenCode key, never an OpenAI subscription token.
     if (!credential || credential.type !== "key") return undefined
     return { Authorization: `Bearer ${credential.key}` }
   })
-  return yield* makeJevClient(credentials, config)
+
+export const makeJev = Effect.fn("makeJev")(function* (ctx: Context, config: RoutingConfig["jev"]) {
+  return yield* makeJevClient(jevCredentials(ctx, config), config)
 })

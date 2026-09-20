@@ -179,6 +179,43 @@ test("routing reuses native agents, respects custom names and reports confidence
   )
 })
 
+test("only confident quick implementation skips planning; explicit planning stays read-only", async () => {
+  for (const tier of ["quick", "standard", "deep"] as const) {
+    for (const confidence of [0.95, 0.2]) {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const client = yield* makeJevClient(credentials, config.jev, {
+            fetch: responseFetch(() =>
+              Response.json({
+                answers: {
+                  complexity: {
+                    type: "choice",
+                    choice: tier,
+                    confidence,
+                    probabilities: Object.fromEntries(
+                      ["quick", "standard", "deep"].map((name) => [name, name === tier ? 0.98 : 0.01])
+                    )
+                  }
+                }
+              })
+            )
+          })
+          const route = yield* routeTask(client, "Remove the specified card border", "implement", config)
+          expect(route.planning).toBe(tier === "quick" && confidence >= config.routing.confidence ? "skip" : "required")
+          const plan = yield* routeTask(client, "Explicitly plan this border change", "plan", config)
+          expect(plan).toMatchObject({ agent: "plan", tier: "deep", source: "role-policy", planning: "not-applicable" })
+        })
+      )
+    }
+  }
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const client = yield* makeJevClient(Effect.succeed(undefined), config.jev)
+      expect((yield* routeTask(client, "Remove border", "implement", config)).planning).toBe("required")
+    })
+  )
+})
+
 test("low confidence retains tools and high confidence preserves recovery and goal tools", () => {
   const names = ["a", "b", "c", "d", "execute", "subagent", "osuki_goal", "osuki_review_report", "read"]
   const answer = {
