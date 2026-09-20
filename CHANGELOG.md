@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.0
+
+### Minor Changes
+
+- [#7](https://github.com/osuki-dev/opencode-osuki-agent/pull/7) [`35eecad`](https://github.com/osuki-dev/opencode-osuki-agent/commit/35eecad10d93287cc62977bd2c5b43769851f2c7) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Preserve active objectives across follow-up messages with Jev intent classification and native OpenCode worker coordination. Add revision-checked work checkpoints, explicit pause and cancellation controls, and focused continuity guidance loaded on demand. Display the coordinator as Osuki while retaining its configurable models and stable agent ID.
+
 ## 0.1.3
 
 ### Patch Changes
