@@ -6,6 +6,7 @@ import plugin from "../src/index.ts"
 type Hook = (event: Record<string, unknown>) => Effect.Effect<void, unknown>
 type Tool = {
   name: string
+  input: unknown
   execute(input: unknown, context: { sessionID: string; agent: string }): Effect.Effect<{ content: string }, unknown>
 }
 
@@ -76,6 +77,7 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
   const runHooks = (registry: Map<string, Hook[]>, name: string, event: Record<string, unknown>) =>
     Effect.forEach(registry.get(name) ?? [], (hook) => hook(event), { discard: true })
   return {
+    tools,
     model,
     selectedAgents,
     permission: (event: Record<string, unknown>) => runHooks(permissionHooks, "evaluate", event),
@@ -85,6 +87,33 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
       tools.get(name)!.execute(input, { sessionID: "root", agent }),
     status: () => tools.get("osuki_status")!.execute({}, { sessionID: "root", agent: "osuki" })
   }
+})
+
+test("routing and review expose JSON-only schemas and validate arguments locally", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        for (const name of ["osuki_route", "osuki_review", "osuki_status"]) {
+          const input = harness.tools.get(name)!.input
+          expect(JSON.parse(JSON.stringify(input))).toEqual(input)
+          expect(input).toHaveProperty("type", "object")
+          expect(input).not.toHaveProperty("ast")
+        }
+        const invalidRoute = yield* harness.call("osuki_route", { task: "", role: "implement" }).pipe(Effect.exit)
+        expect(invalidRoute._tag).toBe("Failure")
+        const invalidReview = yield* harness
+          .call("osuki_review", {
+            task: "x",
+            diff: "x",
+            context: "x",
+            validation: [{ check: "x", result: "passed", evidence: "" }]
+          })
+          .pipe(Effect.exit)
+        expect(invalidReview._tag).toBe("Failure")
+      })
+    )
+  )
 })
 
 test("Jev cannot be selected as the Osuki conversation model", async () => {
