@@ -1,0 +1,59 @@
+{
+  "name": "@osuki-dev/opencode-osuki-agent",
+  "version": "0.1.0",
+  "description": "Effect-native OpenCode coordinator with Jev routing and persistent goals",
+  "keywords": [
+    "agents",
+    "effect",
+    "jev",
+    "opencode",
+    "opencode-plugin"
+  ],
+  "homepage": "https://github.com/osuki-dev/opencode-osuki-agent#readme",
+  "bugs": {
+    "url": "https://github.com/osuki-dev/opencode-osuki-agent/issues"
+  },
+  "license": "MIT",
+  "author": "osuki-dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/osuki-dev/opencode-osuki-agent.git"
+  },
+  "files": [
+    "dist",
+    "agents",
+    "skills",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "changeset": "changeset",
+    "version:packages": "changeset version && bun install --lockfile-only",
+    "build": "bun build src/index.ts --target bun --packages external --outdir dist",
+    "prepack": "bun run build",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "1.0.1",
+    "@changesets/cli": "3.0.3",
+    "@opencode/plugin": "2.0.1"
+  },
+  "engines": {
+    "bun": ">=1.4.2",
+    "opencode": "2.0.1"
+  },
+  "packageManager": "bun@1.4.2"
+}
