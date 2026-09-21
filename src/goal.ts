@@ -336,12 +336,12 @@ export const installGoals: (
   yield* ctx.tool.hook(
     "execute.before",
     Effect.fn("goal.beforeTool")(function* (event) {
-      const input = decodeSubagentInput(event.input)
+      if (readOnlyTools.has(event.tool)) return
+      const input = event.tool === "subagent" ? decodeSubagentInput(event.input) : Option.none()
       if (
-        readOnlyTools.has(event.tool) ||
-        (event.tool === "subagent" &&
-          Option.isSome(input) &&
-          [config.agents.plan, config.agents.review].includes(input.value.agent))
+        event.tool === "subagent" &&
+        Option.isSome(input) &&
+        [config.agents.plan, config.agents.review].includes(input.value.agent)
       )
         return
       const id = yield* goalSession(event.sessionID)
@@ -376,15 +376,10 @@ export const installGoals: (
             goal.progressKeys = goal.progressKeys.slice(-512)
           }
         }
-        const input = decodeSubagentInput(event.input)
-        const output = decodeSubagentOutput(event.result.output)
-        if (
-          event.agent === config.coordinator &&
-          event.tool === "subagent" &&
-          Option.isSome(input) &&
-          !input.value.background &&
-          Option.isSome(output)
-        ) {
+        const isDelegate = event.agent === config.coordinator && event.tool === "subagent"
+        const input = isDelegate ? decodeSubagentInput(event.input) : Option.none()
+        const output = isDelegate ? decodeSubagentOutput(event.result.output) : Option.none()
+        if (isDelegate && Option.isSome(input) && !input.value.background && Option.isSome(output)) {
           const role =
             input.value.agent === config.agents.plan
               ? "planner"

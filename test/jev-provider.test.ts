@@ -19,12 +19,14 @@ const answer = {
 test("provider defaults are explicit and cross-provider endpoints and inline secrets are rejected", async () => {
   const zen = await Effect.runPromise(parseConfig({}))
   const official = await Effect.runPromise(parseConfig({ jev: { provider: "typesafe", model: "custom-jev" } }))
-  expect(zen.jev).toMatchObject({ provider: "opencode", model: "jev-1.13-free" })
+  expect(zen.jev).toMatchObject({ provider: "opencode", model: "jev-1.13-free", timeoutMs: 10000 })
   expect(official.jev).toMatchObject({
     provider: "typesafe",
     model: "custom-jev",
-    endpoint: "https://api.typesafe.ai/v1/systemone"
+    endpoint: "https://api.typesafe.ai/v1/systemone",
+    timeoutMs: 10000
   })
+  expect((await Effect.runPromise(parseConfig({ jev: { timeoutMs: 2500 } }))).jev.timeoutMs).toBe(2500)
   for (const jev of [
     { provider: "typesafe", endpoint: "https://opencode.ai/zen/v1/systemone" },
     { provider: "opencode", endpoint: "https://api.typesafe.ai/v1/systemone" },

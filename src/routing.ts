@@ -72,19 +72,22 @@ export const routeTask = Effect.fn("routeTask")(function* (
   task: string,
   role: string,
   config: RoutingConfig,
-  context?: unknown
+  context?: unknown,
+  previous?: { task: string; decision: ReturnType<typeof implementationWorkflow> }
 ) {
   const minimum = role === "plan" || role === "review" ? "deep" : "quick"
+  const fixedRole = minimum === "deep" || role === "explore"
+  const reused =
+    role === "implement" && previous?.task === task && previous.decision.source !== "fallback"
+      ? previous.decision
+      : undefined
   const answers =
-    minimum === "deep"
+    fixedRole || reused
       ? undefined
       : yield* jev.evaluate({ context, task: task.slice(0, 6000), role }, WORKFLOW_QUESTIONS)
-  const chosen = chooseTier(
-    answers?.complexity,
-    minimum,
-    role === "explore" ? "quick" : "standard",
-    config.routing.confidence
-  )
+  const chosen =
+    reused?.tier ??
+    chooseTier(answers?.complexity, minimum, role === "explore" ? "quick" : "standard", config.routing.confidence)
   const readOnly = role === "analyse" || role === "explore"
   const tier = readOnly && chosen !== "quick" ? "deep" : chosen
   const agent =
@@ -101,12 +104,12 @@ export const routeTask = Effect.fn("routeTask")(function* (
   return {
     agent,
     tier,
-    source: minimum === "deep" ? "role-policy" : confident ? "jev" : "fallback",
+    source: fixedRole ? "role-policy" : reused ? `${reused.source}-reused` : confident ? "jev" : "fallback",
     confidence: answers?.complexity.confidence,
     planning:
       role !== "implement"
         ? "not-applicable"
-        : implementationWorkflow(answers?.complexity, config, answers?.planning).planning,
+        : (reused ?? implementationWorkflow(answers?.complexity, config, answers?.planning)).planning,
     note: "Use the native subagent tool with this agent; its native OpenCode configuration determines the model."
   }
 })
@@ -126,21 +129,30 @@ export function compactState(messages: SessionContext["messages"]) {
   }))
 }
 
+const recoveryTool = /execute|subagent|question|skill|search|osuki_|read|grep|glob/
+
+export function canShortlist(names: string[], config: RoutingConfig["routing"]) {
+  return (
+    names.length >= 6 && names.length <= 200 && names.filter((name) => !recoveryTool.test(name)).length > config.topK
+  )
+}
+
 export function shortlist(
   answer: ChoiceAnswer | undefined,
   names: string[],
   config: RoutingConfig["routing"]
 ): string[] {
   if (!answer || answer.confidence < config.toolConfidence) return names
+  const available = new Set(names)
   const ranked = Object.entries(answer.probabilities)
-    .filter(([name]) => names.includes(name))
+    .filter(([name]) => available.has(name))
     .sort((a, b) => b[1] - a[1])
   if (ranked.length === 0) return names
   // Keep the configured candidates and preserve completion, delegation and recovery.
   return [
     ...new Set([
       ...ranked.slice(0, config.topK).map(([name]) => name),
-      ...names.filter((name) => /execute|subagent|question|skill|search|osuki_|read|grep|glob/.test(name))
+      ...names.filter((name) => recoveryTool.test(name))
     ])
   ]
 }

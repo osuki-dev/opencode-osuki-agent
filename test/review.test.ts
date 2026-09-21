@@ -80,6 +80,10 @@ test("missing, uncertain and adverse Jev answers never approve a lightweight rev
     const jev: JevClient = { evaluate: () => Effect.succeed(answers), status: () => Effect.die("unused") }
     const result = await Effect.runPromise(reviewChange(jev, input, config, true))
     expect(result.outcome).not.toBe("lightweight-passed")
+    if (!answers) {
+      expect(result.reason).toContain("review is pending")
+      expect("note" in result && result.note).toContain("Do not gather unrelated evidence")
+    }
     if (answers?.scope?.choice !== "risky") expect(result).not.toHaveProperty("agent")
   }
 })

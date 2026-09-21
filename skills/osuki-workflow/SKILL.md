@@ -18,7 +18,7 @@ Choose validation by impact. Documentation, cosmetic and mechanical edits usuall
 For eligible quick edits, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Obtain the unified diff from git diff or diff -u, not a handwritten summary. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
 
 - lightweight-passed: no coding-model reviewer is needed outside goals.
-- evidence-required: gather focused evidence or report a validation blocker.
+- evidence-required: gather only missing relevant evidence. If Jev is unavailable, keep passed checks and report review pending; do not invent more work or poll the provider.
 - changes-required: inspect the flagged issue, correct confirmed defects and recheck.
 - reviewer-required: use the configured independent foreground reviewer.
 

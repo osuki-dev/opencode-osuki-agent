@@ -59,7 +59,7 @@ export const parseConfig = Effect.fn("osuki.parseConfig")(function* (input: unkn
         options.jev?.provider === "typesafe"
           ? "https://api.typesafe.ai/v1/systemone"
           : "https://opencode.ai/zen/v1/systemone",
-      timeoutMs: options.jev?.timeoutMs ?? 2500,
+      timeoutMs: options.jev?.timeoutMs ?? 10_000,
       cooldownMs: options.jev?.cooldownMs ?? 60_000
     },
     routing: {

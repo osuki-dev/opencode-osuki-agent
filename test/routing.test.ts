@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test"
 import { Effect, Ref } from "effect"
 import { makeJevClient, validateAnswers, redact, JEV_MODEL, JEV_ENDPOINT } from "../src/jev.ts"
-import { chooseTier, implementationWorkflow, routeTask, shortlist, ROUTE_QUESTIONS } from "../src/routing.ts"
+import {
+  canShortlist,
+  chooseTier,
+  implementationWorkflow,
+  routeTask,
+  shortlist,
+  ROUTE_QUESTIONS
+} from "../src/routing.ts"
 import { dangerousShell } from "../src/policy.ts"
 import { parseConfig } from "../src/config.ts"
 
@@ -12,7 +19,7 @@ const decision = {
   probabilities: { quick: 0.96, standard: 0.03, deep: 0.01 }
 }
 const planning = {
-  type: "choice",
+  type: "choice" as const,
   choice: "skip",
   confidence: 0.95,
   probabilities: { skip: 1, required: 0, assess: 0 }
@@ -106,7 +113,7 @@ test("invalid provider output and missing credentials fall back without paid cal
         fetch: responseFetch(() => Response.json({ answers: {} }))
       })
       expect(yield* invalid.evaluate({}, ROUTE_QUESTIONS)).toBeUndefined()
-      expect((yield* invalid.status()).last).toBe("timeout-or-invalid-response")
+      expect((yield* invalid.status()).last).toBe("invalid-response-or-transport")
       const missing = yield* makeJevClient(Effect.succeed(undefined), config.jev, {
         fetch: responseFetch(() => {
           throw new Error("must not call")
@@ -118,11 +125,12 @@ test("invalid provider output and missing credentials fall back without paid cal
   )
 })
 
-test("timeout aborts the transport and opens the configured cooldown", async () => {
+test("timeout aborts the transport, backs off briefly and recovers without automatic retries", async () => {
   let calls = 0
   let aborted = false
   const request = (async (_url: string | URL | Request, init?: RequestInit) => {
     calls++
+    if (calls === 3) return Response.json(body)
     expect(init?.redirect).toBe("error")
     return new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener(
@@ -137,12 +145,23 @@ test("timeout aborts the transport and opens the configured cooldown", async () 
   }) as unknown as typeof fetch
   await Effect.runPromise(
     Effect.gen(function* () {
-      const client = yield* makeJevClient(credentials, { ...config.jev, timeoutMs: 10 }, { fetch: request })
+      const clock = yield* Ref.make(0)
+      const client = yield* makeJevClient(
+        credentials,
+        { ...config.jev, timeoutMs: 10 },
+        { fetch: request, now: Ref.get(clock) }
+      )
       expect(yield* client.evaluate({}, ROUTE_QUESTIONS)).toBeUndefined()
       expect(aborted).toBe(true)
       expect(yield* client.evaluate({}, ROUTE_QUESTIONS)).toBeUndefined()
       expect(calls).toBe(1)
-      expect((yield* client.status()).last).toBe("timeout-or-invalid-response")
+      expect(yield* client.status()).toMatchObject({ last: "timeout", retryAfterMs: 5000 })
+      yield* Ref.set(clock, 5001)
+      expect(yield* client.evaluate({}, ROUTE_QUESTIONS)).toBeUndefined()
+      expect(yield* client.status()).toMatchObject({ calls: 2, last: "timeout", retryAfterMs: 10000 })
+      yield* Ref.set(clock, 15002)
+      expect((yield* client.evaluate({}, ROUTE_QUESTIONS))?.complexity).toEqual(decision)
+      expect(yield* client.status()).toMatchObject({ calls: 3, last: "ok", retryAfterMs: 0 })
     })
   )
 })
@@ -237,6 +256,54 @@ test("low confidence retains tools and high confidence preserves recovery and go
   expect(shortlist(answer, names, config.routing)).toContain("execute")
   expect(shortlist(answer, names, config.routing)).toContain("osuki_review_report")
   expect(shortlist(answer, names, config.routing)).not.toContain("d")
+})
+
+test("fixed roles and identical confident assignments do not repeat Jev calls", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const client = yield* makeJevClient(credentials, config.jev, { fetch: responseFetch(() => Response.json(body)) })
+      const previous = {
+        task: "Rename a local variable",
+        decision: implementationWorkflow(decision, config, planning)
+      }
+      for (const role of ["explore", "plan", "review"]) {
+        expect((yield* routeTask(client, "Investigate complex architecture", role, config)).source).toBe("role-policy")
+      }
+      expect(yield* routeTask(client, previous.task, "implement", config, [], previous)).toMatchObject({
+        agent: "osuki-worker-quick",
+        source: "jev-reused",
+        planning: "skip"
+      })
+      expect((yield* client.status()).calls).toBe(0)
+      yield* routeTask(client, "A different subtask", "implement", config, [], previous)
+      yield* routeTask(client, previous.task, "implement", config, [], {
+        ...previous,
+        decision: implementationWorkflow(undefined, config)
+      })
+      expect((yield* client.status()).calls).toBe(2)
+    })
+  )
+})
+
+test("tool ranking is skipped when optional tools already fit the shortlist budget", () => {
+  const protectedNames = ["execute", "subagent", "question", "skill", "osuki_review", "read", "grep"]
+  expect(canShortlist(protectedNames, config.routing)).toBe(false)
+  expect(canShortlist([...protectedNames, "patch", "shell", "webfetch"], config.routing)).toBe(false)
+  expect(canShortlist([...protectedNames, "patch", "shell", "webfetch", "extra"], config.routing)).toBe(true)
+  expect(canShortlist(["edit", "shell", "write", "a", "b", "c"], { ...config.routing, topK: 6 })).toBe(false)
+})
+
+test("tool ranking preserves catalog order for ties, recovery tools and unknown-tool exclusion", () => {
+  const names = ["edit", "shell", "write", "grep", "read", "execute"]
+  const answer = {
+    ...decision,
+    choice: "missing",
+    probabilities: { missing: 0.7, shell: 0.1, edit: 0.1, write: 0.1 }
+  }
+  expect(shortlist(answer, names, { ...config.routing, topK: 1 })).toEqual(["shell", "grep", "read", "execute"])
+  expect(shortlist(answer, names, { ...config.routing, topK: 2 })).toEqual(["shell", "edit", "grep", "read", "execute"])
+  expect(shortlist({ ...answer, probabilities: { missing: 1 } }, names, config.routing)).toEqual(names)
+  expect(names).toEqual(["edit", "shell", "write", "grep", "read", "execute"])
 })
 
 test("dangerous operations are denied but daily development remains allowed", () => {

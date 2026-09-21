@@ -71,7 +71,7 @@ Plugin options use OpenCode's native object-form registration:
           "standard": "general",
           "deep": "osuki-worker-deep"
         },
-        "jev": { "model": "jev-1.13-free", "timeoutMs": 2500, "cooldownMs": 60000 },
+        "jev": { "model": "jev-1.13-free", "timeoutMs": 10000, "cooldownMs": 60000 },
         "routing": { "confidence": 0.75, "toolConfidence": 0.8, "topK": 3 },
         "excludedModels": ["openai/gpt-5.3-codex", "openai/gpt-5.3-codex-spark"]
       }
@@ -80,7 +80,9 @@ Plugin options use OpenCode's native object-form registration:
 }
 ```
 
-Tool optimization shortlists top-level tools only when Jev confidence is sufficient. Recovery and delegation tools remain available. OpenCode Code Mode and its internal tool catalog remain host-owned; this plugin does not claim to prune that inner catalog.
+Jev has a configurable 10-second request deadline, not a fixed delay. A timeout backs off from 5 seconds up to `cooldownMs`; there are no automatic retries. HTTP rate limits retain their backoff and `Retry-After` handling. An unavailable review stays pending without triggering extra code checks or an expensive reviewer.
+
+Tool optimization shortlists top-level tools only when Jev confidence is sufficient and optional tools exceed the shortlist budget. Recovery and delegation tools remain available. OpenCode Code Mode and its internal tool catalog remain host-owned; this plugin does not claim to prune that inner catalog.
 
 ## Follow-up messages
 

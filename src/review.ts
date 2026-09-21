@@ -82,6 +82,13 @@ export const reviewChange = Effect.fn("osuki.reviewChange")(function* (
   )
     return evidenceRequired("Focused validation evidence is missing or a reported check has not passed")
   const answers = yield* jev.evaluate(input, REVIEW_QUESTIONS)
+  if (!answers)
+    return {
+      outcome: "evidence-required" as const,
+      reason: "Jev is unavailable; this review is pending, not a finding against the diff.",
+      goalReceipt: false,
+      note: "Keep the existing diff and passed checks. Do not gather unrelated evidence, rerun passed checks, poll, or escalate to a coding-model reviewer. Report the pending review; retry after provider recovery, not by changing the evidence to bypass cooldown."
+    }
   const confident = (id: string) => {
     const answer = answers?.[id]
     return answer && answer.confidence >= config.routing.confidence ? answer.choice : undefined
@@ -90,7 +97,7 @@ export const reviewChange = Effect.fn("osuki.reviewChange")(function* (
     return { ...escalate("The actual diff contains meaningful behavior or security risk"), answers }
   if (confident("scope") !== "bounded")
     return {
-      ...evidenceRequired("Diff scope is unclear or Jev is unavailable; inspect scope before reassessing"),
+      ...evidenceRequired("Diff scope is unclear; inspect relevant scope before reassessing"),
       answers
     }
   if (["mismatch", "regression"].includes(confident("correctness") ?? ""))

@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
-import { Clock, Config, Effect, Redacted, Ref, Schema, Semaphore } from "effect"
+import { Cause, Clock, Config, Effect, Redacted, Ref, Schema, Semaphore } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { RoutingConfig } from "./config.ts"
 
@@ -153,14 +153,24 @@ export const makeJevClient = Effect.fn("makeJevClient")(function* (
       Effect.provideService(FetchHttpClient.Fetch, options.fetch ?? globalThis.fetch),
       Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
       Effect.timeout(config.timeoutMs),
-      Effect.catch(() =>
+      Effect.catch((error) =>
         Effect.gen(function* () {
           const time = yield* now
-          yield* Ref.update(state, (value) => ({
-            ...value,
-            last: "timeout-or-invalid-response",
-            retryAt: time + config.cooldownMs
-          }))
+          yield* Ref.update(state, (value) => {
+            const failures = value.failures + 1
+            const timeout = Cause.isTimeoutError(error)
+            // A single slow response is not a rate limit. Retry only on the next
+            // useful evaluation; repeated timeouts still back off to the configured cap.
+            const delay = timeout
+              ? Math.min(config.cooldownMs, 5000 * 2 ** Math.min(failures - 1, 5))
+              : config.cooldownMs
+            return {
+              ...value,
+              failures,
+              last: timeout ? "timeout" : "invalid-response-or-transport",
+              retryAt: time + delay
+            }
+          })
           return undefined
         })
       ),
