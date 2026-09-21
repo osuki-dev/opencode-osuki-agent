@@ -1,6 +1,6 @@
 {
   "name": "@osuki-dev/opencode-osuki-agent",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Effect-native OpenCode coordinator with Jev routing and persistent goals",
   "keywords": [
     "agents",
