@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.1
+
+### Patch Changes
+
+- [#9](https://github.com/osuki-dev/opencode-osuki-agent/pull/9) [`8848dea`](https://github.com/osuki-dev/opencode-osuki-agent/commit/8848dea136f07353a86c09bb9233968eb47afc31) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Separate Jev model routing from planning so clear, bounded requests can proceed directly without inheriting earlier task complexity. Require evidence-backed reassessment when Jev is uncertain, avoid unnecessary reviewer escalation, and expose bounded routing diagnostics. Refine workflow and tool prompts for native planning, continuity, and lightweight diff review.
+
 ## 0.2.0
 
 ### Minor Changes
