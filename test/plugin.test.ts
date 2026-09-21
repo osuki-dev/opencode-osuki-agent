@@ -54,10 +54,14 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     },
     agent: {
       transform: (
-        transform: (editor: { update(id: string, fn: (agent: typeof displayAgent) => void): void }) => void
+        transform: (editor: {
+          get(id: string): typeof displayAgent | undefined
+          update(id: string, fn: (agent: typeof displayAgent) => void): void
+        }) => void
       ) =>
         Effect.sync(() => {
           transform({
+            get: (id: string) => (id === displayAgent.id ? displayAgent : undefined),
             update: (id, fn) => {
               if (id === displayAgent.id) fn(displayAgent)
             }
@@ -656,12 +660,12 @@ test("Jev decision rewrites native dispatch and records the configured agent mod
   }
 })
 
-test("Osuki changes only the display name, not the agent ID or configured model", async () => {
+test("Osuki registers its prompt without changing the agent ID or configured model", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness()
-        expect(harness.displayAgent).toEqual({ id: "osuki", name: "Osuki", model: { id: "user-selected-model" } })
+        expect(harness.displayAgent).toMatchObject({ id: "osuki", name: "Osuki", model: { id: "user-selected-model" } })
       })
     )
   )

@@ -2,6 +2,7 @@ import { Clock, Effect, PartitionedSemaphore, Schema } from "effect"
 import type { Plugin } from "@opencode/plugin/effect/plugin"
 import type { Skill } from "@opencode/plugin/effect"
 import { parseConfig } from "./config.ts"
+import { registerAgents } from "./agents.ts"
 import { makeJev } from "./jev.ts"
 import { installGoals } from "./goal.ts"
 import { dangerousShell, READ_ONLY_ACTIONS } from "./policy.ts"
@@ -80,12 +81,7 @@ export default {
     })
     let lastTools: { before: number; after: number; mode: string } | undefined
     const goals = yield* installGoals(ctx, config)
-    yield* ctx.agent.transform((editor) => {
-      if (config.coordinator === "osuki")
-        editor.update(config.coordinator, (agent) => {
-          agent.name = Schema.String.pipe(Schema.brand("Agent.Name")).make("Osuki")
-        })
-    })
+    yield* ctx.agent.transform((editor) => registerAgents(editor, config))
 
     const isManaged = Effect.fn("osuki.isManaged")(function* (sessionID: string, agent: string | undefined) {
       if (agent === config.coordinator) return true
