@@ -11,7 +11,7 @@ Interpret the injected Jev category against the actual user message:
 - cancel: honor explicit user intent immediately. osuki_work pause/cancel interrupts all recorded children; for a narrower stop, use the affected child's native control instead. Never auto-resume.
 - uncertain: inspect the message and context or ask a focused question. Do not cancel work or authorize new edits based on the fallback.
 
-Use the latest revision for checkpoint/state changes. Resolve only message IDs that have been answered, incorporated, completed, or explicitly declined by the user. Keep deferred requests pending. Preserve unchanged requirements when revising the objective; a worker result from an older revision requires checking against the new requirements and fresh review where relevant.
+Use the latest revision for state changes. Only checkpoint accepts objective updates and resolved IDs from pending user messages; these IDs are never acceptance criteria. complete/pause/block/cancel accept only action, revision and evidence. For example: `{"action":"block","revision":0,"evidence":"Review service unavailable; diff checks passed."}` uses the observed revision, not a fixed zero. Keep deferred requests pending. Preserve unchanged requirements; check older worker results against current scope before accepting them.
 
 Native worker notifications and session inspection are execution evidence. A stored child ID, a delivered instruction, or a successful tool call is not proof of completed implementation. Reconcile workers after reconnect/reload before reporting progress; do not spawn duplicates or silently restart stopped work. Checkpoint resumes paused/blocked work only with explicit user direction.
 

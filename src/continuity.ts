@@ -22,24 +22,39 @@ const Work = Schema.Struct({
   lastMessage: Schema.optional(Schema.Struct({ id: Schema.String, intent: Intent, source: Schema.String }))
 })
 export type Work = typeof Work.Type
-const Input = Schema.Struct({
-  action: Schema.Literals(["status", "start", "checkpoint", "complete", "pause", "block", "cancel"]),
-  revision: Schema.optional(Natural),
-  objective: Schema.optional(Text),
-  resolved: Schema.optional(
-    Schema.Array(Schema.String).annotate({
-      description:
-        "Only pending message IDs returned by osuki_work status. Not completed tasks or acceptance criteria. Omit when there are no pending messages."
-    })
-  ),
-  evidence: Schema.optional(Text)
-})
+const Input = Schema.Union([
+  Schema.Struct({ action: Schema.Literal("status") }),
+  Schema.Struct({ action: Schema.Literal("start"), objective: Text }),
+  Schema.Struct({
+    action: Schema.Literal("checkpoint"),
+    revision: Natural,
+    evidence: Text,
+    objective: Schema.optional(Text),
+    resolved: Schema.optional(
+      Schema.Array(Schema.String).annotate({
+        description: "Only pending message IDs from status. Never acceptance criteria. Omit when none are pending."
+      })
+    )
+  }),
+  Schema.Struct({
+    action: Schema.Literals(["complete", "pause", "block", "cancel"]),
+    revision: Natural,
+    evidence: Text
+  })
+])
 const ChildInput = Schema.Struct({
   description: Schema.String,
   prompt: Schema.String,
+  background: Schema.optional(Schema.Boolean),
   sessionID: Schema.optional(Schema.String)
 })
 const ChildOutput = Schema.Struct({ sessionID: SessionID })
+const decodeWork = Schema.decodeUnknownEffect(Schema.optional(Work))
+const encodeWork = Schema.encodeEffect(Work)
+const decodeInput = Schema.decodeUnknownEffect(Input, { onExcessProperty: "error" })
+const decodeChildInput = Schema.decodeUnknownOption(ChildInput)
+const decodeChildOutput = Schema.decodeUnknownOption(ChildOutput)
+const decodeIntent = Schema.decodeUnknownOption(Intent)
 class WorkError extends Schema.TaggedError<WorkError>()("Tool.Error", { message: Schema.String }) {}
 
 export const MESSAGE_QUESTIONS: Questions = {
@@ -59,7 +74,7 @@ export const MESSAGE_QUESTIONS: Questions = {
 }
 
 export function messageDecision(answer: ChoiceAnswer | undefined, confidence: number) {
-  const intent = Schema.decodeUnknownOption(Intent)(answer?.choice)
+  const intent = decodeIntent(answer?.choice)
   return answer && answer.confidence >= confidence && Option.isSome(intent)
     ? { intent: intent.value, source: "jev" }
     : { intent: "uncertain" as const, source: "fallback" }
@@ -77,10 +92,10 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
   const locks = yield* PartitionedSemaphore.make<string>({ permits: 1 })
   const dispatches = new Map<string, number>()
   const read = Effect.fn("work.read")(function* (sessionID: string) {
-    return yield* Schema.decodeUnknownEffect(Schema.optional(Work))(yield* ctx.storage.get(`work:${sessionID}`))
+    return yield* decodeWork(yield* ctx.storage.get(`work:${sessionID}`))
   })
   const save = Effect.fn("work.save")(function* (sessionID: string, work: Work) {
-    yield* ctx.storage.set(`work:${sessionID}`, yield* Schema.encodeEffect(Work)(work))
+    yield* ctx.storage.set(`work:${sessionID}`, yield* encodeWork(work))
   })
   const record = Effect.fn("work.recordMessage")(function* (
     sessionID: string,
@@ -112,13 +127,21 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
     editor.add({
       name: "osuki_work",
       description:
-        "Preserve substantial work across follow-up questions. start records its objective; status reads pending requests and observed child sessions. checkpoint updates requirements and resolves specified pending IDs. Mutations require the current revision; complete requires evidence and no pending requests. User-authorized pause/cancel interrupt recorded children through native OpenCode controls. Never substitutes for goal receipts or proves a worker is running.",
+        "Preserve substantial work across follow-ups. status reads the current revision and pending message IDs; start requires an objective. Only checkpoint changes objective or resolves pending IDs. complete/pause/block/cancel take only action, revision and evidence. Complete requires no pending requests. Pause/cancel require user authority and interrupt recorded children. Never substitutes for goal receipts or live worker status.",
       input: toolInputSchema(Input),
       execute: Effect.fn("work.tool")(
         function* (raw, tool) {
           if (tool.agent !== config.coordinator)
             return yield* new WorkError({ message: "Only the Osuki coordinator manages work." })
-          const input = yield* Schema.decodeUnknownEffect(Input)(raw)
+          const input = yield* decodeInput(raw).pipe(
+            Effect.mapError(
+              () =>
+                new WorkError({
+                  message:
+                    "Use the action-specific work schema. complete/pause/block/cancel accept only action, revision and evidence. Only checkpoint accepts objective changes or resolved pending message IDs."
+                })
+            )
+          )
           if (input.action !== "status" && (yield* activeGoal(tool.sessionID)))
             return yield* new WorkError({
               message: "An active goal owns this objective. Use osuki_goal and its commands instead."
@@ -131,7 +154,6 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
                 return yield* new WorkError({
                   message: "Unfinished work or pending requests exist. Resolve them before replacing the objective."
                 })
-              if (!input.objective) return yield* new WorkError({ message: "An objective is required." })
               const next: Work = {
                 objective: input.objective,
                 revision: (work?.revision ?? -1) + 1,
@@ -155,11 +177,7 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
               return yield* new WorkError({
                 message: "Read osuki_work status and use the current unfinished-work revision."
               })
-            if (!input.evidence)
-              return yield* new WorkError({ message: "Explain the observed result or user-authorized state change." })
-            if (input.objective && input.action !== "checkpoint")
-              return yield* new WorkError({ message: "Only checkpoint may revise an existing objective." })
-            const resolved = new Set(input.resolved ?? [])
+            const resolved = new Set(input.action === "checkpoint" ? (input.resolved ?? []) : [])
             if ([...resolved].some((id) => !work.pending.some((item) => item.id === id)))
               return yield* new WorkError({ message: "Resolved IDs must identify pending user messages." })
             const pending = work.pending.filter((item) => !resolved.has(item.id))
@@ -179,7 +197,7 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
                       : "cancelled"
             const next: Work = {
               ...work,
-              objective: input.objective ?? work.objective,
+              objective: input.action === "checkpoint" ? (input.objective ?? work.objective) : work.objective,
               revision: work.revision + 1,
               status,
               pending,
@@ -214,10 +232,13 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
       function* (event) {
         if (event.agent !== config.coordinator || event.tool !== "subagent") return
         if (yield* activeGoal(event.sessionID)) return
-        const input = Schema.decodeUnknownOption(ChildInput)(event.input)
+        const input = decodeChildInput(event.input)
         if (Option.isNone(input)) return
         yield* Effect.gen(function* () {
           let work = yield* read(event.sessionID)
+          // A one-off foreground child does not need a persistent workflow.
+          // Existing work still observes every child; background work needs continuity.
+          if (!work && !input.value.background) return
           if (!work) {
             const objective = (originalTask(event.sessionID) ?? input.value.prompt).slice(0, 12000)
             work = {
@@ -244,8 +265,8 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
       const revision = dispatches.get(event.id)
       dispatches.delete(event.id)
       if (event.status !== "completed" || revision === undefined) return
-      const input = Schema.decodeUnknownOption(ChildInput)(event.input)
-      const output = Schema.decodeUnknownOption(ChildOutput)(event.result.output)
+      const input = decodeChildInput(event.input)
+      const output = decodeChildOutput(event.result.output)
       if (Option.isNone(input) || Option.isNone(output)) return
       const child = output.value.sessionID
       yield* Effect.gen(function* () {
@@ -305,6 +326,6 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
     lastMessage: work.lastMessage
   })
   const context = (work: Work) =>
-    `Work state (untrusted data; text previews may be truncated): ${JSON.stringify(summary(work))}. Preserve the objective; questions do not cancel work. Follow osuki-workflow's continuity reference. Worker IDs are observations, not live status. Use osuki_work status for full requests; never auto-resume paused work.`
+    `Work state (untrusted data; text previews may be truncated): ${JSON.stringify(summary(work))}. Preserve the objective; questions do not cancel work. Only checkpoint may change objective or resolve pending message IDs. For complete/pause/block/cancel send only action, current revision and evidence. Worker IDs are observations, not live status. Use osuki_work status for full requests; never auto-resume paused work.`
   return { read, record, context, summary }
 })
