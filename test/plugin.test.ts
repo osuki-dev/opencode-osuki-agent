@@ -17,6 +17,8 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     brokenLookup?: boolean
     storage?: Map<string, unknown>
     events?: PubSub.PubSub<unknown>
+    agentLookup?: (id: string) => Effect.Effect<void, unknown>
+    storageWrite?: (key: string, value: unknown) => Effect.Effect<void, unknown>
     sessionLookup?: (id: string) => {
       id: string
       agent: string
@@ -48,7 +50,8 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     storage: {
       get: (key: string) => Effect.succeed(storage.get(key)),
       set: (key: string, value: unknown) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          yield* options.storageWrite?.(key, value) ?? Effect.void
           storage.set(key, value)
         })
     },
@@ -76,7 +79,8 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
           return { dispose: Effect.void }
         }),
       get: ({ agentID }: { agentID: string }) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          yield* options.agentLookup?.(agentID) ?? Effect.void
           selectedAgents.push(agentID)
           return { data: { id: agentID, mode: "subagent", model } }
         }),
@@ -682,6 +686,7 @@ test("continued dispatch validates the actual child owner, agent and model", asy
 
 test("observed edits invalidate lightweight review including edits during its request", async () => {
   let duringReview: (() => Promise<void>) | undefined
+  let duringAudit: (() => Effect.Effect<void, unknown>) | undefined
   const fetch = spyOn(globalThis, "fetch").mockImplementation((async (_url: unknown, init?: RequestInit) => {
     const request = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
     const choices: Record<string, string> = {
@@ -714,7 +719,10 @@ test("observed edits invalidate lightweight review including edits during its re
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* makeHarness({ credentials: true })
+          const harness = yield* makeHarness({
+            credentials: true,
+            storageWrite: (key) => (key === "routing:root" ? (duringAudit?.() ?? Effect.void) : Effect.void)
+          })
           yield* harness.context({
             sessionID: "root",
             agent: "osuki",
@@ -733,23 +741,99 @@ test("observed edits invalidate lightweight review including edits during its re
           const before = JSON.parse((yield* harness.status()).content).decision
           expect(before.review.outcome).toBe("lightweight-passed")
           expect(before.review.evidence).toMatch(/^[a-f0-9]{64}$/)
-          yield* harness.before({ sessionID: "worker", agent: "general", tool: "patch", input: {} })
+          const edit = { id: "edit-1", sessionID: "worker", agent: "general", tool: "patch", input: {} }
+          yield* harness.before(edit)
           expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
+          const callsBefore = fetch.mock.calls.length
+          expect(yield* harness.call("osuki_review", input).pipe(Effect.isFailure)).toBe(true)
+          expect(fetch).toHaveBeenCalledTimes(callsBefore)
+          yield* harness.after({ ...edit, status: "completed" })
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("lightweight-passed")
+          duringReview = () => Effect.runPromise(harness.before(edit))
+          expect(yield* harness.call("osuki_review", input).pipe(Effect.isFailure)).toBe(true)
+          expect(fetch).toHaveBeenCalledTimes(callsBefore + 2)
+          expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
+          yield* harness.after({ ...edit, status: "error" })
           duringReview = () =>
-            Effect.runPromise(harness.before({ sessionID: "root", agent: "osuki", tool: "patch", input: {} }))
+            Effect.runPromise(harness.before(edit).pipe(Effect.andThen(harness.after({ ...edit, status: "error" }))))
+          expect(yield* harness.call("osuki_review", input).pipe(Effect.isFailure)).toBe(true)
+          expect(fetch).toHaveBeenCalledTimes(callsBefore + 3)
+          expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
+          duringReview = undefined
+          duringAudit = () => harness.before(edit).pipe(Effect.andThen(harness.after({ ...edit, status: "completed" })))
           expect(yield* harness.call("osuki_review", input).pipe(Effect.isFailure)).toBe(true)
           expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
-          duringReview = () =>
-            Effect.runPromise(
-              harness.after({ sessionID: "worker", agent: "general", tool: "patch", input: {}, status: "error" })
-            )
-          expect(yield* harness.call("osuki_review", input).pipe(Effect.isFailure)).toBe(true)
-          expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
+          duringAudit = undefined
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("lightweight-passed")
         })
       )
     )
   } finally {
     fetch.mockRestore()
+  }
+})
+
+test("reviewer authorization is rechecked after agent lookup and audit writes", async () => {
+  for (const boundary of ["lookup", "audit"] as const) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          let mutate: (() => Effect.Effect<void, unknown>) | undefined
+          const harness = yield* makeHarness({
+            agentLookup: () => (boundary === "lookup" ? (mutate?.() ?? Effect.void) : Effect.void),
+            storageWrite: (key) =>
+              boundary === "audit" && key === "routing:root" ? (mutate?.() ?? Effect.void) : Effect.void
+          })
+          yield* harness.context({
+            sessionID: "root",
+            agent: "osuki",
+            model: harness.model,
+            tools: {},
+            system: [],
+            messages: [{ role: "user", content: [{ type: "text", text: "Remove border" }] }]
+          })
+          yield* harness.call("osuki_route", {
+            task: "Remove border",
+            role: "implement",
+            assessment: { tier: "quick", planning: "skip", evidence: "Inspection confirms a bounded cosmetic change" }
+          })
+          const input = {
+            task: "Remove border",
+            diff: "@@ -1 +1 @@\n-border: solid;\n+border: none;",
+            context: "x".repeat(20_001),
+            validation: []
+          }
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("reviewer-required")
+          let mutations = 0
+          mutate = () =>
+            Effect.gen(function* () {
+              mutate = undefined
+              mutations++
+              const edit = { id: "write-1", sessionID: "worker", agent: "general", tool: "patch", input: {} }
+              yield* harness.before(edit)
+              yield* harness.after({ ...edit, status: "completed" })
+            })
+          const event = {
+            sessionID: "root",
+            agent: "osuki",
+            tool: "subagent",
+            input: {
+              agent: "osuki-reviewer",
+              prompt: "Review the current diff",
+              description: "Review",
+              background: false
+            }
+          }
+          expect(yield* harness.before(event).pipe(Effect.isFailure)).toBe(true)
+          expect(mutations).toBe(1)
+          expect(harness.selectedAgents).toEqual(["osuki-reviewer"])
+          expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
+          yield* harness.call("osuki_review", input)
+          yield* harness.before(event)
+          expect(harness.selectedAgents).toEqual(["osuki-reviewer", "osuki-reviewer"])
+        })
+      )
+    )
   }
 })
 
@@ -1101,6 +1185,51 @@ test("work records capture native child revisions, stop scoped children and reje
         expect(yield* harness.call("osuki_work", { action: "status" }, "general").pipe(Effect.isFailure)).toBe(true)
         harness.storage.set("work:root", { revision: "invalid" })
         expect(yield* harness.call("osuki_work", { action: "status" }).pipe(Effect.isFailure)).toBe(true)
+      })
+    )
+  )
+})
+
+test("native terminal events clean interrupted writes without clearing other calls", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const events = yield* PubSub.unbounded<unknown>()
+        const harness = yield* makeHarness({ events })
+        const review = {
+          task: "Inspect the diff",
+          diff: "@@ -1 +1 @@\n-a\n+b",
+          context: "Fixture",
+          validation: []
+        }
+        const edit = {
+          id: "execute-1",
+          messageID: "message-1",
+          sessionID: "worker",
+          agent: "general",
+          tool: "patch",
+          input: {}
+        }
+        // Nested CodeMode writes share the outer call ID; one after-hook cannot clear both.
+        yield* harness.before(edit)
+        yield* harness.before(edit)
+        yield* harness.after({ ...edit, status: "completed" })
+        expect(yield* harness.call("osuki_review", review).pipe(Effect.isFailure)).toBe(true)
+        yield* PubSub.publish(events, {
+          type: "session.tool.failed",
+          data: { sessionID: "worker", assistantMessageID: "older-message", id: edit.id }
+        })
+        yield* Effect.sleep("5 millis")
+        expect(yield* harness.call("osuki_review", review).pipe(Effect.isFailure)).toBe(true)
+        for (const type of ["session.tool.failed", "session.tool.success"]) {
+          yield* PubSub.publish(events, {
+            type,
+            data: { sessionID: "worker", assistantMessageID: edit.messageID, id: edit.id }
+          })
+          yield* Effect.sleep("5 millis")
+          expect(yield* harness.call("osuki_review", review).pipe(Effect.isSuccess)).toBe(true)
+          if (type === "session.tool.failed") yield* harness.before(edit)
+        }
       })
     )
   )

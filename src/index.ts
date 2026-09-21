@@ -1,4 +1,4 @@
-import { Clock, Effect, PartitionedSemaphore, Schema } from "effect"
+import { Clock, Effect, PartitionedSemaphore, Schema, Stream } from "effect"
 import { fileURLToPath } from "node:url"
 import type { Plugin } from "@opencode/plugin/effect/plugin"
 import type { Skill } from "@opencode/plugin/effect"
@@ -89,8 +89,9 @@ export default {
     const isManaged = (sessionID: string, agent: string | undefined) =>
       managedRoot(sessionID, agent).pipe(Effect.map(Boolean))
     const requireDispatch = Effect.fn("osuki.requireDispatch")(function* (sessionID: string, agent: string) {
+      const activeGoal = yield* goals.active(sessionID)
       const workflow = sessions.get(sessionID)?.workflow
-      const denied = dispatchDenial(agent, workflow, yield* goals.active(sessionID), config)
+      const denied = dispatchDenial(agent, workflow, activeGoal, config)
       if (!denied) return
       yield* audit(sessionID, {
         request: workflow?.request,
@@ -203,6 +204,10 @@ export default {
           )
           if (tool.agent !== config.coordinator)
             return yield* new ToolFailure({ message: "Only the Osuki coordinator may request lightweight review" })
+          if (sessions.mutating(tool.sessionID))
+            return yield* new ToolFailure({
+              message: "A write is still running. Review the settled diff after it finishes."
+            })
           const cached = sessions.get(tool.sessionID)?.workflow
           const decision = cached?.decision
           const result =
@@ -222,7 +227,7 @@ export default {
                     decision.planning === "skip"
                 )
           const evidence = messageKey(JSON.stringify(input))
-          if (cached && !sessions.reviewed(tool.sessionID, cached.epoch, { outcome: result.outcome, evidence }))
+          if (cached && (!sessions.current(tool.sessionID, cached.epoch) || sessions.mutating(tool.sessionID)))
             return yield* new ToolFailure({
               message: "Work changed during review. Inspect the current diff and request a fresh review."
             })
@@ -234,6 +239,10 @@ export default {
             epoch: cached?.epoch,
             jev: yield* jev.status()
           })
+          if (cached && !sessions.reviewed(tool.sessionID, cached.epoch, { outcome: result.outcome, evidence }))
+            return yield* new ToolFailure({
+              message: "Work changed before review completed. Review the settled diff again."
+            })
           return { content: JSON.stringify(result) }
         })
       })
@@ -298,7 +307,7 @@ export default {
           if (reason) return yield* new ToolFailure({ message: `Osuki denied: ${reason}` })
         }
         if (event.tool !== "subagent") {
-          if (mutatingTools.has(event.tool)) sessions.invalidate(root)
+          if (mutatingTools.has(event.tool)) sessions.mutation(root, event, true)
           return
         }
         const input = yield* Schema.decodeUnknownEffect(DelegateInput)(event.input).pipe(
@@ -315,7 +324,7 @@ export default {
           yield* requireDispatch(event.sessionID, child.agent)
           if (child.model && config.excludedModels.includes(`${child.model.providerID}/${child.model.id}`))
             return yield* new ToolFailure({ message: "The continued child uses an excluded model" })
-          if (workflow && !sessions.canDispatch(event.sessionID, workflow))
+          if (workflow && !sessions.canDispatch(event.sessionID, workflow, child.agent === config.agents.review))
             return yield* new ToolFailure({ message: "Work changed while resolving the child. Recheck its scope." })
           event.input = { ...input, agent: child.agent }
           if (![config.agents.plan, config.agents.review, config.agents.explore].includes(child.agent))
@@ -349,17 +358,23 @@ export default {
           return yield* new ToolFailure({
             message: "Work changed during routing. Dispatch again using the current scope."
           })
-        event.input = { ...input, agent: route.agent }
-        if (![config.agents.plan, config.agents.review, config.agents.explore].includes(route.agent))
-          sessions.invalidate(event.sessionID)
-        sessions.routed(event.sessionID, { ...route, model: selected.model ?? "inherits parent", dispatch: "applied" })
         yield* audit(event.sessionID, {
           request: workflow?.request,
           event: "dispatch",
+          phase: "selection",
           agent: route.agent,
           source: route.source,
           model: selected.model ?? "inherits parent"
         })
+        yield* requireDispatch(event.sessionID, route.agent)
+        if (workflow && !sessions.canDispatch(event.sessionID, workflow, route.agent === config.agents.review))
+          return yield* new ToolFailure({
+            message: "Dispatch evidence changed. Recheck the settled scope before delegating."
+          })
+        event.input = { ...input, agent: route.agent }
+        if (![config.agents.plan, config.agents.review, config.agents.explore].includes(route.agent))
+          sessions.invalidate(event.sessionID)
+        sessions.routed(event.sessionID, { ...route, model: selected.model ?? "inherits parent", dispatch: "applied" })
       })
     )
     yield* ctx.tool.hook(
@@ -368,8 +383,18 @@ export default {
         if (!mutatingTools.has(event.tool)) return
         // A tool can finish (or partially fail) while a review is in flight.
         const root = yield* managedRoot(event.sessionID, event.agent)
-        if (root) sessions.invalidate(root)
+        if (root) sessions.mutation(root, event, false)
       })
+    )
+    yield* ctx.event.subscribe().pipe(
+      Stream.runForEach((event) =>
+        Effect.sync(() => {
+          // Native settlement also covers interruption and rejected before-hooks.
+          if (event.type !== "session.tool.success" && event.type !== "session.tool.failed") return
+          sessions.settled({ ...event.data, messageID: event.data.assistantMessageID })
+        })
+      ),
+      Effect.forkScoped
     )
     const continuity = yield* makeContinuity(
       ctx,

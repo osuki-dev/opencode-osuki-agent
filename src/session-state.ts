@@ -22,7 +22,10 @@ interface SessionState {
   readonly workflow?: Workflow
   readonly lastRoute?: unknown
   readonly toolRouting?: ToolRouting
+  readonly mutations?: ReadonlyMap<string, number>
 }
+type Call = { readonly sessionID: string; readonly messageID: string; readonly id: string }
+const callKey = (call: Call) => JSON.stringify([call.sessionID, call.messageID, call.id])
 
 // Runtime evidence only. OpenCode owns durable work, goals and execution state.
 export function makeSessionState() {
@@ -32,20 +35,50 @@ export function makeSessionState() {
     const next = { ...entries.get(id), ...change }
     entries.delete(id)
     entries.set(id, next)
-    if (entries.size > 256) entries.delete(entries.keys().next().value ?? "")
+    if (entries.size > 256) {
+      // Active writes are safety state, not evictable cached decisions.
+      for (const [key, state] of entries) {
+        if (state.mutations?.size) continue
+        entries.delete(key)
+        break
+      }
+    }
     return next
   }
   const current = (id: string, expected: number) => entries.get(id)?.workflow?.epoch === expected
+  const mutating = (id: string) => Boolean(entries.get(id)?.mutations?.size)
   return {
     get: (id: string) => entries.get(id),
     current,
-    canDispatch(id: string, expected: Workflow) {
+    mutating,
+    mutation(id: string, call: Call, active: boolean) {
+      const state = entries.get(id)
+      const mutations = new Map(state?.mutations)
+      const key = callKey(call)
+      const count = (mutations.get(key) ?? 0) + (active ? 1 : -1)
+      // Parallel CodeMode tools share their outer call ID.
+      if (count > 0) mutations.set(key, count)
+      else mutations.delete(key)
+      update(id, { mutations, workflow: state?.workflow && { ...state.workflow, epoch: ++epoch, review: undefined } })
+    },
+    settled(call: Call) {
+      const key = callKey(call)
+      for (const [id, state] of entries) {
+        if (!state.mutations?.has(key)) continue
+        const mutations = new Map(state.mutations)
+        mutations.delete(key)
+        update(id, { mutations, workflow: state.workflow && { ...state.workflow, epoch: ++epoch, review: undefined } })
+        return
+      }
+    },
+    canDispatch(id: string, expected: Workflow, review = false) {
       const workflow = entries.get(id)?.workflow
       // Parallel workers may edit without changing the assignment decision.
       return (
         workflow?.request === expected.request &&
         workflow.revision === expected.revision &&
-        workflow.decision === expected.decision
+        workflow.decision === expected.decision &&
+        (!review || (workflow.epoch === expected.epoch && !mutating(id)))
       )
     },
     observe(id: string, input: Pick<Workflow, "task" | "request" | "context" | "revision">) {
@@ -77,7 +110,7 @@ export function makeSessionState() {
     },
     reviewed(id: string, expected: number, review: NonNullable<Workflow["review"]>) {
       const workflow = entries.get(id)?.workflow
-      if (!workflow || !current(id, expected)) return false
+      if (!workflow || !current(id, expected) || mutating(id)) return false
       update(id, { workflow: { ...workflow, review } })
       return true
     },
