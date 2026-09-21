@@ -4,73 +4,25 @@ An Effect-native coordinator with Jev routing, native subagents, project skills,
 
 ## Install in OpenCode
 
-Requires Bun 1.4.2+ and OpenCode 2.0.1. Install OpenCode using its [official instructions](https://opencode.ai/v2/docs/) first. The SDK is pinned to the tested host version; newer OpenCode releases may change plugin APIs.
+Requires OpenCode 2.0.1 and Bun 1.4.2+.
 
-Install the published npm package globally through OpenCode to use Osuki across projects. No repository clone or local build is needed.
+```sh
+opencode plugin add @osuki-dev/opencode-osuki-agent@latest
+```
 
-1. Install the published plugin through OpenCode:
+Select **Osuki** in a new session and choose your coding model. The plugin registers its agents, workflow skill and goal commands automatically—no file copying or source build.
 
-   ```sh
-   opencode plugin add @osuki-dev/opencode-osuki-agent@0.2.1
-   ```
+Connect OpenCode Zen for default Jev routing, or configure [the official TypeSafe API](#models-and-routing). Ask Osuki to run `osuki_status` with `probe: true` to verify Jev; TypeSafe probes may incur charges.
 
-2. Install the four agent definitions from the matching release. The plugin supplies tools and the workflow skill, but does not create these agent definitions. Run this Bash snippet; existing files are preserved for manual comparison:
+Models remain configurable through OpenCode's native `agents.<id>.model` settings. Workers inherit the session model unless configured otherwise. Existing agent files and model overrides still take precedence; remove only unmodified old Osuki prompt copies if you want package updates to supply their prompts.
 
-   ```bash
-   (
-     set -eu
-     osuki_version=0.2.1
-     osuki_agents="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agents"
-     osuki_download="$(mktemp -d)"
-     for agent in osuki osuki-worker-quick osuki-worker-deep osuki-reviewer; do
-       curl --fail --location --silent --show-error \
-         "https://raw.githubusercontent.com/osuki-dev/opencode-osuki-agent/v${osuki_version}/agents/${agent}.md" \
-         --output "$osuki_download/$agent.md"
-     done
-     mkdir -p "$osuki_agents"
-     for agent in osuki osuki-worker-quick osuki-worker-deep osuki-reviewer; do
-       if [ -e "$osuki_agents/$agent.md" ] || [ -L "$osuki_agents/$agent.md" ]; then
-         printf 'Preserved existing agent: %s\n' "$osuki_agents/$agent.md"
-       else
-         cp -n "$osuki_download/$agent.md" "$osuki_agents/$agent.md"
-       fi
-     done
-     printf 'Downloaded agent files retained for comparison: %s\n' "$osuki_download"
-   )
-   ```
+To update:
 
-3. Merge these settings into `~/.config/opencode/opencode.json(c)` (or your custom XDG config directory). Preserve existing providers, credentials, plugins, MCP servers and permission rules. The install command already registers the plugin; do not add it a second time.
+```sh
+opencode plugin update @osuki-dev/opencode-osuki-agent
+```
 
-   ```json
-   {
-     "$schema": "https://opencode.ai/config.json",
-     "default_agent": "osuki",
-     "model": "openai/gpt-5.6-sol",
-     "agents": {
-       "osuki": { "model": "openai/gpt-5.6-sol#medium" },
-       "explore": { "model": "openai/gpt-5.6-luna#low" },
-       "plan": { "mode": "all", "model": "openai/gpt-5.6-sol#high" },
-       "general": { "model": "openai/gpt-5.6-terra#medium" },
-       "osuki-worker-quick": { "model": "openai/gpt-5.6-luna#medium" },
-       "osuki-worker-deep": { "model": "openai/gpt-6-astra#medium" },
-       "osuki-reviewer": { "model": "openai/gpt-5.6-sol#high" }
-     }
-   }
-   ```
-
-   These are editable model examples, not required providers or guaranteed account entitlements. Connect your coding provider through OpenCode and choose models and variants available to your account. Do not configure GPT-5.3 Codex or Codex Spark; they are excluded by default. Built-in `explore`, `plan` and `general` do not need copied prompt files.
-
-4. Configure Jev: the default uses OpenCode Zen's native integration credential. Connect that integration in OpenCode, or follow [the TypeSafe setup below](#models-and-routing) to use the official API with a server-environment key. Coding-provider authentication does not configure Jev authentication.
-
-5. Start OpenCode in any project and select **Osuki** (ID `osuki`) in a new session. Check `opencode plugin list`, then ask Osuki to call `osuki_status` with `probe: true`. Inspect the selected provider, errors and routing records; a loaded plugin alone does not prove Jev is responding. A probe makes a real provider request and TypeSafe usage may be billed.
-
-If changes are not picked up, restart the OpenCode server after saving active work. For a managed local service, use `opencode service restart`; remote servers must be configured and restarted on their own host. Existing sessions keep their selected model, so verify it explicitly. The plugin registers `osuki-workflow` and `/osuki-goal` commands; no separate skill or command installation is needed.
-
-See OpenCode's official [plugin installation](https://opencode.ai/v2/docs/plugins/), [configuration](https://opencode.ai/v2/docs/config), and [agent definitions](https://opencode.ai/v2/docs/agents/) documentation. These examples use V2's plural `plugins` and `agents` fields and the official schema, not a vendored schema.
-
-### Updates
-
-The example pins `0.2.1` for reproducibility. To upgrade, change the existing plugin registration to the intended version and refresh the four agent files from the same release tag. Compare and merge existing prompts rather than overwriting customizations. If you use an unpinned registration, OpenCode also provides `opencode plugin check` and `opencode plugin update @osuki-dev/opencode-osuki-agent`. Updating the package does not refresh manually copied agent files.
+See [OpenCode's plugin documentation](https://opencode.ai/v2/docs/plugins/) for configuration and reload behavior.
 
 ## Models and routing
 
@@ -91,7 +43,7 @@ To select TypeSafe, replace the existing Osuki plugin entry with the following o
 {
   "plugins": [
     {
-      "package": "@osuki-dev/opencode-osuki-agent@0.2.1",
+      "package": "@osuki-dev/opencode-osuki-agent@latest",
       "options": { "jev": { "provider": "typesafe", "model": "jev-latest" } }
     }
   ]
@@ -108,7 +60,7 @@ Plugin options use OpenCode's native object-form registration:
 {
   "plugins": [
     {
-      "package": "@osuki-dev/opencode-osuki-agent@0.2.1",
+      "package": "@osuki-dev/opencode-osuki-agent@latest",
       "options": {
         "coordinator": "osuki",
         "agents": {
