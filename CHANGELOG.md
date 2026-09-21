@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.2
+
+### Patch Changes
+
+- [#12](https://github.com/osuki-dev/opencode-osuki-agent/pull/12) [`42b02dc`](https://github.com/osuki-dev/opencode-osuki-agent/commit/42b02dc81b47b9e079274cbf1cabcb5f1a765725) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Register bundled agent prompts and worker modes automatically when the npm plugin loads. Preserve configured models and custom prompts, enable native planner delegation, and remove manual agent installation from the quickstart.
+
 ## 0.2.1
 
 ### Patch Changes
