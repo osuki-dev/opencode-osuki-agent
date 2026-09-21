@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { Effect, Ref } from "effect"
 import { makeJevClient, validateAnswers, redact, JEV_MODEL, JEV_ENDPOINT } from "../src/jev.ts"
-import { chooseTier, routeTask, shortlist, ROUTE_QUESTIONS } from "../src/routing.ts"
+import { chooseTier, implementationWorkflow, routeTask, shortlist, ROUTE_QUESTIONS } from "../src/routing.ts"
 import { dangerousShell } from "../src/policy.ts"
 import { parseConfig } from "../src/config.ts"
 
@@ -11,9 +11,18 @@ const decision = {
   confidence: 0.95,
   probabilities: { quick: 0.96, standard: 0.03, deep: 0.01 }
 }
-const body = { answers: { complexity: decision } }
+const planning = {
+  type: "choice",
+  choice: "skip",
+  confidence: 0.95,
+  probabilities: { skip: 1, required: 0, assess: 0 }
+}
+const body = { answers: { complexity: decision, planning } }
 const config = await Effect.runPromise(parseConfig({}))
 const credentials = Effect.succeed({ Authorization: "Bearer test-only" })
+test("unavailable Jev requests assessment instead of mandatory planning", () => {
+  expect(implementationWorkflow(undefined, config).planning).toBe("assess")
+})
 const responseFetch = (respond: () => Response) => (async () => respond()) as unknown as typeof fetch
 
 test("provider decisions require every declared criterion and finite normalized probabilities", async () => {
@@ -179,7 +188,7 @@ test("routing reuses native agents, respects custom names and reports confidence
   )
 })
 
-test("only confident quick implementation skips planning; explicit planning stays read-only", async () => {
+test("planning is independent of model tier; uncertainty requests assessment", async () => {
   for (const tier of ["quick", "standard", "deep"] as const) {
     for (const confidence of [0.95, 0.2]) {
       await Effect.runPromise(
@@ -188,6 +197,7 @@ test("only confident quick implementation skips planning; explicit planning stay
             fetch: responseFetch(() =>
               Response.json({
                 answers: {
+                  planning: { ...planning, confidence },
                   complexity: {
                     type: "choice",
                     choice: tier,
@@ -201,7 +211,7 @@ test("only confident quick implementation skips planning; explicit planning stay
             )
           })
           const route = yield* routeTask(client, "Remove the specified card border", "implement", config)
-          expect(route.planning).toBe(tier === "quick" && confidence >= config.routing.confidence ? "skip" : "required")
+          expect(route.planning).toBe(confidence >= config.routing.confidence ? "skip" : "assess")
           const plan = yield* routeTask(client, "Explicitly plan this border change", "plan", config)
           expect(plan).toMatchObject({ agent: "plan", tier: "deep", source: "role-policy", planning: "not-applicable" })
         })
@@ -211,7 +221,7 @@ test("only confident quick implementation skips planning; explicit planning stay
   await Effect.runPromise(
     Effect.gen(function* () {
       const client = yield* makeJevClient(Effect.succeed(undefined), config.jev)
-      expect((yield* routeTask(client, "Remove border", "implement", config)).planning).toBe("required")
+      expect((yield* routeTask(client, "Remove border", "implement", config)).planning).toBe("assess")
     })
   )
 })

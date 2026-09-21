@@ -7,13 +7,15 @@ Use the injected role IDs and workflow decision; project instructions and user s
 
 ## Implementation
 
-With planning=skip, inspect and make the bounded change without a formal planner. With planning=required, obtain a foreground plan specifying affected paths, risks and acceptance checks. Explicit planning requests and active goals retain planning. Use osuki_route only to reassess changed scope or actual implementation risk.
+Resolve the latest request against recent conversation, keeping prior objectives without inheriting their complexity. Model tier does not prescribe a workflow. With planning=skip, answer, inspect or implement directly within user authority. With planning=required, delegate a read-only foreground pass to the configured native planner for the unresolved design choices, dependencies or risks. Explicit planning requests and active goals retain planning.
+
+With planning=assess, inspect briefly or clarify the target; do not automatically delegate. If Jev remains unavailable or uncertain, use osuki_route with an assessment containing tier, planning and concrete evidence. Do not invent certainty or assume edit authority. Reassess a confident decision only when new scope/risk evidence or an explicit planning requirement changes it. A rejected planner call is not a reason to rename the task or delegate planning to a worker. osuki_status exposes recent request hashes, classifications, provider health and dispatch decisions for diagnosis.
 
 Choose validation by impact. Documentation, cosmetic and mechanical edits usually need focused diff/context inspection; behavior changes need relevant regression checks. Run broad integration/E2E for cross-component risk or explicit project gates, not by default. Report unavailable required checks as blockers; do not silently waive policy or repair unrelated infrastructure.
 
 ## Review
 
-For eligible quick edits, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
+For eligible quick edits, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Obtain the unified diff from git diff or diff -u, not a handwritten summary. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
 
 - lightweight-passed: no coding-model reviewer is needed outside goals.
 - evidence-required: gather focused evidence or report a validation blocker.
