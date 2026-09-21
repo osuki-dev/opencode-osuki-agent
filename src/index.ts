@@ -1,12 +1,20 @@
-import { Effect, Schema } from "effect"
+import { Clock, Effect, PartitionedSemaphore, Schema } from "effect"
 import type { Plugin } from "@opencode/plugin/effect/plugin"
 import type { Skill } from "@opencode/plugin/effect"
 import { parseConfig } from "./config.ts"
 import { makeJev } from "./jev.ts"
 import { installGoals } from "./goal.ts"
 import { dangerousShell, READ_ONLY_ACTIONS } from "./policy.ts"
-import { compactState, implementationWorkflow, routeTask, shortlist, ROUTE_QUESTIONS } from "./routing.ts"
+import {
+  compactState,
+  implementationWorkflow,
+  routeTask,
+  shortlist,
+  ROUTE_QUESTIONS,
+  WORKFLOW_QUESTIONS
+} from "./routing.ts"
 import type { Questions } from "./jev.ts"
+import { redact } from "./jev.ts"
 import { ReviewInput, reviewChange } from "./review.ts"
 import { toolInputSchema } from "./tool-schema.ts"
 import { makeContinuity, messageKey, MESSAGE_QUESTIONS, unfinished } from "./continuity.ts"
@@ -16,7 +24,17 @@ import { version } from "../package.json" with { type: "json" }
 class ToolFailure extends Schema.TaggedError<ToolFailure>()("Tool.Error", { message: Schema.String }) {}
 const RouteInput = Schema.Struct({
   task: Schema.NonEmptyString,
-  role: Schema.Literals(["implement", "explore", "analyse", "plan", "review"])
+  role: Schema.Literals(["implement", "explore", "analyse", "plan", "review"]),
+  assessment: Schema.optional(
+    Schema.Struct({
+      tier: Schema.Literals(["quick", "standard", "deep"]),
+      planning: Schema.Literals(["skip", "required", "assess"]),
+      evidence: Schema.NonEmptyString.check(Schema.isPattern(/\S/), Schema.isMaxLength(6000))
+    }).annotate({
+      description:
+        "Use only when Jev cannot confidently decide. State the observed scope, risk or explicit user planning requirement; this does not grant edit permission."
+    })
+  )
 })
 const StatusInput = Schema.Struct({ probe: Schema.optional(Schema.Boolean) })
 const ShellInput = Schema.Struct({ command: Schema.String })
@@ -40,11 +58,26 @@ export default {
       string,
       {
         task: string
+        request: string
+        context: ReturnType<typeof compactState>
         revision?: number
         decision: ReturnType<typeof implementationWorkflow>
         review?: Effect.Success<ReturnType<typeof reviewChange>>["outcome"]
       }
     >()
+    const auditLocks = yield* PartitionedSemaphore.make<string>({ permits: 1 })
+    const audit = Effect.fn("osuki.audit")(function* (sessionID: string, entry: unknown) {
+      yield* Effect.gen(function* () {
+        const key = `routing:${sessionID}`
+        const previous = yield* Schema.decodeUnknownEffect(Schema.optional(Schema.Array(Schema.Json)))(
+          yield* ctx.storage.get(key)
+        )
+        const safe = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
+        )(redact(JSON.stringify(entry)))
+        yield* ctx.storage.set(key, [...(previous ?? []).slice(-23), { at: yield* Clock.currentTimeMillis, ...safe }])
+      }).pipe(auditLocks.withPermits(sessionID, 1), Effect.orDie)
+    })
     let lastTools: { before: number; after: number; mode: string } | undefined
     const goals = yield* installGoals(ctx, config)
     yield* ctx.agent.transform((editor) => {
@@ -107,7 +140,7 @@ export default {
       editor.add({
         name: "osuki_route",
         description:
-          "Decide the implementation workflow before planning: planning=skip permits a quick edit without a planner; required means obtain a plan first. Also previews worker routing. Active goals still require a planner. Models come from OpenCode configuration.",
+          "Reassess current scope using concrete new evidence, not a relabeled task to bypass routing. planning=skip needs no planner; assess means inspect or clarify, not mandatory planning. If Jev is unavailable or uncertain, supply an assessment with evidence. Explicit goals retain their receipts. Models remain configurable.",
         input: toolInputSchema(RouteInput),
         execute: Effect.fn("osuki.route")(function* (raw, tool) {
           const input = yield* Schema.decodeUnknownEffect(RouteInput)(raw).pipe(
@@ -115,14 +148,36 @@ export default {
           )
           if (!(yield* isManaged(tool.sessionID, tool.agent)))
             return yield* new ToolFailure({ message: "This tool belongs to an Osuki session" })
-          const route = yield* routeTask(jev, input.task, input.role, config)
           const cached = workflows.get(tool.sessionID)
-          if (input.role === "implement" && cached) {
+          const workflowRole = input.role === "implement" || input.role === "plan"
+          const route = yield* routeTask(
+            jev,
+            input.task,
+            workflowRole ? "implement" : input.role,
+            config,
+            cached?.context
+          )
+          if (workflowRole && route.planning === "assess" && input.assessment) {
+            Object.assign(route, input.assessment, {
+              evidence: redact(input.assessment.evidence),
+              source: "coordinator-assessment",
+              agent: config.agents[input.assessment.tier]
+            })
+          }
+          if (input.role === "plan") route.agent = config.agents.plan
+          if (workflowRole && cached) {
             workflows.set(tool.sessionID, {
-              task: cached.task,
+              ...cached,
+              review: undefined,
               decision: { tier: route.tier, planning: route.planning, source: route.source }
             })
           }
+          yield* audit(tool.sessionID, {
+            request: cached?.request,
+            event: "reassessment",
+            route,
+            jev: yield* jev.status()
+          })
           latestRoutes.set(tool.sessionID, route)
           return { content: JSON.stringify(route) }
         })
@@ -139,14 +194,30 @@ export default {
           if (tool.agent !== config.coordinator)
             return yield* new ToolFailure({ message: "Only the Osuki coordinator may request lightweight review" })
           const decision = workflows.get(tool.sessionID)?.decision
-          const result = yield* reviewChange(
-            jev,
-            input,
-            config,
-            decision?.source === "jev" && decision.tier === "quick" && decision.planning === "skip"
-          )
+          const result =
+            decision?.planning === "assess"
+              ? {
+                  outcome: "evidence-required" as const,
+                  reason:
+                    "Workflow assessment is unresolved. Use osuki_route with observed scope/risk evidence and an assessment if Jev is uncertain. Do not escalate to a reviewer merely because Jev is unavailable.",
+                  goalReceipt: false
+                }
+              : yield* reviewChange(
+                  jev,
+                  input,
+                  config,
+                  (decision?.source === "jev" || decision?.source === "coordinator-assessment") &&
+                    decision.tier === "quick" &&
+                    decision.planning === "skip"
+                )
           const cached = workflows.get(tool.sessionID)
           if (cached) workflows.set(tool.sessionID, { ...cached, review: result.outcome })
+          yield* audit(tool.sessionID, {
+            request: cached?.request,
+            event: "review",
+            outcome: result.outcome,
+            jev: yield* jev.status()
+          })
           return { content: JSON.stringify(result) }
         })
       })
@@ -174,6 +245,7 @@ export default {
               opencode: ctx.app.version,
               jev: yield* jev.status(),
               lastRoute: latestRoutes.get(tool.sessionID),
+              routing: yield* ctx.storage.get(`routing:${tool.sessionID}`).pipe(Effect.orDie),
               work: yield* continuity.read(tool.sessionID).pipe(
                 Effect.map((work) => (work ? continuity.summary(work) : undefined)),
                 Effect.orDie
@@ -208,15 +280,37 @@ export default {
         )
         const workflow = workflows.get(event.sessionID)
         if (
-          input.agent === config.agents.review &&
-          workflow?.decision.planning === "skip" &&
-          workflow.review !== "reviewer-required" &&
-          !(yield* goals.active(event.sessionID))
-        )
+          input.agent === config.agents.plan &&
+          !(yield* goals.active(event.sessionID)) &&
+          workflow?.decision.planning !== "required"
+        ) {
+          yield* audit(event.sessionID, {
+            request: workflow?.request,
+            event: "planner-denied",
+            decision: workflow?.decision
+          })
           return yield* new ToolFailure({
             message:
-              "A quick edit does not require the expensive reviewer. Use osuki_review; collect missing evidence or resolve local findings first. A blocked E2E run is not a code-risk escalation. Reassess only if actual scope or risk changes."
+              "A separate planner is not justified for the current request. Answer, inspect or implement directly within user authority. If new design/risk evidence or an explicit planning requirement changes this, use osuki_route with that evidence; on Jev uncertainty provide a reasoned assessment. Do not relabel the same work to bypass this decision."
           })
+        }
+        if (
+          input.agent === config.agents.review &&
+          (workflow?.decision.planning === "assess" ||
+            (workflow?.decision.tier === "quick" && workflow.decision.planning === "skip")) &&
+          workflow?.review !== "reviewer-required" &&
+          !(yield* goals.active(event.sessionID))
+        ) {
+          yield* audit(event.sessionID, {
+            request: workflow?.request,
+            event: "reviewer-denied",
+            decision: workflow?.decision
+          })
+          return yield* new ToolFailure({
+            message:
+              "Unresolved routing or a bounded edit does not justify the expensive reviewer. Use osuki_route to assess uncertain scope, then osuki_review for eligible edits; collect missing evidence or resolve local findings first. Unavailable Jev or E2E is not a code-risk escalation."
+          })
+        }
         if (input.sessionID) return // A continued child retains its agent/model and original context.
         const role =
           input.agent === config.agents.review
@@ -226,7 +320,7 @@ export default {
               : input.agent === config.agents.explore
                 ? "explore"
                 : "implement"
-        const route = yield* routeTask(jev, input.prompt, role, config)
+        const route = yield* routeTask(jev, input.prompt, role, config, workflow?.context)
         const { data: selected } = yield* ctx.agent
           .get({ agentID: AgentID.make(route.agent) })
           .pipe(Effect.mapError(() => new ToolFailure({ message: "The routed agent is not configured" })))
@@ -238,6 +332,13 @@ export default {
           return yield* new ToolFailure({ message: "The routed agent uses an excluded model" })
         event.input = { ...input, agent: route.agent }
         latestRoutes.set(event.sessionID, { ...route, model: selected.model ?? "inherits parent", dispatch: "applied" })
+        yield* audit(event.sessionID, {
+          request: workflow?.request,
+          event: "dispatch",
+          agent: route.agent,
+          source: route.source,
+          model: selected.model ?? "inherits parent"
+        })
         if (latestRoutes.size > 256) latestRoutes.delete(latestRoutes.keys().next().value ?? "")
       })
     )
@@ -269,12 +370,18 @@ export default {
           event.agent === config.coordinator ? yield* continuity.read(event.sessionID).pipe(Effect.orDie) : undefined
         const hasWork = Boolean(unfinished(work)) && !(yield* goals.active(event.sessionID))
         const messageChanged = hasWork && Boolean(task) && work?.lastMessage?.id !== messageKey(task ?? "")
-        const objective = hasWork ? work?.objective : task
+        const objective = task
+        const request = messageKey(
+          user?.id ??
+            JSON.stringify(
+              event.messages.filter((message) => message.role === "user").map((message) => message.content)
+            )
+        )
         const cached = workflows.get(event.sessionID)
         if (hasWork && cached && cached.revision !== work?.revision)
           workflows.set(event.sessionID, { ...cached, revision: work?.revision, review: undefined })
-        const classify = event.agent === config.coordinator && Boolean(objective) && cached?.task !== objective
-        const questions: Questions = classify ? { ...ROUTE_QUESTIONS } : {}
+        const classify = event.agent === config.coordinator && Boolean(objective) && cached?.request !== request
+        const questions: Questions = classify ? { ...WORKFLOW_QUESTIONS } : {}
         if (messageChanged) Object.assign(questions, MESSAGE_QUESTIONS)
         if (routeTools)
           questions.next = {
@@ -301,8 +408,16 @@ export default {
           work = yield* continuity.record(event.sessionID, task, work.revision, answers?.message).pipe(Effect.orDie)
         if (work && hasWork) event.system.push({ type: "text", text: continuity.context(work) })
         if (classify && objective) {
-          const decision = implementationWorkflow(answers?.complexity, config)
-          workflows.set(event.sessionID, { task: objective, decision, revision: work?.revision })
+          const decision = implementationWorkflow(answers?.complexity, config, answers?.planning)
+          const context = compactState(event.messages)
+          workflows.set(event.sessionID, { task: objective, request, context, decision, revision: work?.revision })
+          yield* audit(event.sessionID, {
+            request,
+            event: "classification",
+            decision,
+            answers,
+            jev: yield* jev.status()
+          })
           if (workflows.size > 256) workflows.delete(workflows.keys().next().value ?? "")
           latestRoutes.set(event.sessionID, { ...decision, dispatch: "workflow" })
         }
@@ -310,7 +425,7 @@ export default {
         if (event.agent === config.coordinator && workflow && workflow.task === objective) {
           event.system.push({
             type: "text",
-            text: `Implementation workflow: ${JSON.stringify(workflow.decision)}. Latest review: ${workflow.review ?? "not-reviewed"}. skip means no planner, focused validation and osuki_review; required means foreground planning and independent review. evidence-required requests evidence or a blocker report, not a stronger reviewer; changes-required requests local investigation/fixes. Respect explicit project gates and active-goal receipts. Questions remain read-only. Reassess only actual scope/code risk, not unavailable test infrastructure.`
+            text: `Current-request workflow: ${JSON.stringify(workflow.decision)}. Latest review: ${workflow.review ?? "not-reviewed"}. Resolve references from recent conversation; preserve unfinished objectives without inheriting their complexity. skip means no separate planner, not waived review. assess means briefly inspect or clarify, then record an evidence-backed osuki_route assessment if needed; never automatically plan. required means delegate a read-only foreground pass to the configured native planner before implementation or presenting the requested plan. Model tier, planning, review and validation are separate decisions. Quick bounded edits use osuki_review; other changes need proportionate independent review. Questions remain read-only. Respect explicit project gates and active-goal receipts. Reassess only new scope/risk evidence or explicit planning requirements, not unavailable infrastructure.`
           })
         }
         if (!routeTools) {

@@ -26,7 +26,12 @@ const Input = Schema.Struct({
   action: Schema.Literals(["status", "start", "checkpoint", "complete", "pause", "block", "cancel"]),
   revision: Schema.optional(Natural),
   objective: Schema.optional(Text),
-  resolved: Schema.optional(Schema.Array(Schema.String)),
+  resolved: Schema.optional(
+    Schema.Array(Schema.String).annotate({
+      description:
+        "Only pending message IDs returned by osuki_work status. Not completed tasks or acceptance criteria. Omit when there are no pending messages."
+    })
+  ),
   evidence: Schema.optional(Text)
 })
 const ChildInput = Schema.Struct({

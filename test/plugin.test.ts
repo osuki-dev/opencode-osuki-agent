@@ -269,7 +269,16 @@ test("initial requests batch workflow and tool routing, cache decisions, and rec
       Object.entries(input.questions).map(([id, raw]) => {
         const question = raw as { criteria: Record<string, string> }
         const keys = Object.keys(question.criteria)
-        const choice = id === "complexity" ? (input.state.includes("architecture") ? "deep" : "quick") : "read"
+        const choice =
+          id === "complexity"
+            ? input.state.includes("architecture")
+              ? "deep"
+              : "quick"
+            : id === "planning"
+              ? input.state.includes("architecture")
+                ? "required"
+                : "skip"
+              : "read"
         return [
           id,
           {
@@ -304,7 +313,7 @@ test("initial requests batch workflow and tool routing, cache decisions, and rec
             )
           )
           yield* harness.context(first)
-          expect(questionSets[0]).toEqual(["complexity", "next"])
+          expect(questionSets[0]).toEqual(["complexity", "planning", "next"])
           expect(first.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
           const same = event("Remove the border")
           yield* harness.context(same)
@@ -312,8 +321,15 @@ test("initial requests batch workflow and tool routing, cache decisions, and rec
           expect(same.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
           const changed = event("Redesign the authentication architecture")
           yield* harness.context(changed)
-          expect(questionSets[1]).toEqual(["complexity"])
+          expect(questionSets[1]).toEqual(["complexity", "planning"])
           expect(changed.system.some((part) => part.text.includes('"planning":"required"'))).toBe(true)
+          const repeated = {
+            ...event("Remove the border"),
+            messages: [{ role: "user", content: [{ type: "text", text: "Remove the border" }], id: "new-message" }]
+          }
+          yield* harness.context(repeated)
+          yield* harness.context(repeated)
+          expect(questionSets).toHaveLength(3)
         })
       )
     )
@@ -328,6 +344,7 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
     const risky = String(request.state).includes("security change")
     const choices: Record<string, string> = {
       complexity: risky ? "deep" : "quick",
+      planning: risky ? "required" : "skip",
       scope: "bounded",
       correctness: "satisfied",
       validation: "sufficient"
@@ -429,7 +446,7 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
   }
 })
 
-test("initial workflow falls back to planning when Jev has no credential", async () => {
+test("initial workflow requests assessment when Jev has no credential", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -445,18 +462,144 @@ test("initial workflow falls back to planning when Jev has no credential", async
         yield* harness.context(event)
         expect(
           event.system.some(
-            (part) => part.text.includes('"planning":"required"') && part.text.includes('"source":"fallback"')
+            (part) => part.text.includes('"planning":"assess"') && part.text.includes('"source":"fallback"')
           )
         ).toBe(true)
+        const planner = {
+          sessionID: "root",
+          agent: "osuki",
+          tool: "subagent",
+          input: { agent: "plan", description: "Plan", prompt: "Plan deletion" }
+        }
+        expect(yield* harness.before(planner).pipe(Effect.isFailure)).toBe(true)
+        const unassessed = JSON.parse(
+          (yield* harness.call("osuki_review", {
+            task: "Delete label",
+            diff: "@@ -1 +0,0 @@\n-label",
+            context: "Decorative label",
+            validation: [{ check: "diff", result: "passed", evidence: "Only label removed" }]
+          })).content
+        )
+        expect(unassessed.outcome).toBe("evidence-required")
+        expect(
+          yield* harness
+            .before({ ...planner, input: { ...planner.input, agent: "osuki-reviewer" } })
+            .pipe(Effect.isFailure)
+        ).toBe(true)
+        yield* harness.call("osuki_route", {
+          role: "implement",
+          task: "Delete the confirmed decorative label",
+          assessment: {
+            tier: "quick",
+            planning: "skip",
+            evidence: "Inspected the label; it has no interaction or dependencies."
+          }
+        })
+        expect(yield* harness.before(planner).pipe(Effect.isFailure)).toBe(true)
+        const review = JSON.parse(
+          (yield* harness.call("osuki_review", {
+            task: "Delete label",
+            diff: "@@ -1 +0,0 @@\n-label",
+            context: "Decorative label",
+            validation: [{ check: "diff", result: "passed", evidence: "Only label removed" }]
+          })).content
+        )
+        expect(review.outcome).toBe("evidence-required")
+        const status = JSON.parse((yield* harness.status()).content)
+        expect(status.routing.some((entry: { event: string }) => entry.event === "planner-denied")).toBe(true)
+        expect(status.lastRoute.source).toBe("coordinator-assessment")
+        yield* harness.call("osuki_route", {
+          role: "plan",
+          task: "User explicitly requests a plan before any edit",
+          assessment: {
+            tier: "quick",
+            planning: "required",
+            evidence: "The current user explicitly asks for a read-only plan."
+          }
+        })
+        yield* harness.before(planner)
+        expect(harness.selectedAgents).toEqual(["plan"])
       })
     )
   )
+})
+
+test("native planning is blocked for direct work but allowed for explicit planning and goals", async () => {
+  let requiresPlan = false
+  const fetch = spyOn(globalThis, "fetch").mockImplementation((async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
+    return Response.json({
+      answers: Object.fromEntries(
+        Object.entries(request.questions as Record<string, { criteria: Record<string, string> }>).map(([id, q]) => {
+          const choice = id === "planning" ? (requiresPlan ? "required" : "skip") : id === "message" ? "amend" : "quick"
+          return [
+            id,
+            {
+              type: "choice",
+              choice,
+              confidence: 0.98,
+              probabilities: Object.fromEntries(Object.keys(q.criteria).map((k) => [k, k === choice ? 1 : 0]))
+            }
+          ]
+        })
+      )
+    })
+  }) as typeof globalThis.fetch)
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ credentials: true })
+          const context = (text: string) => ({
+            sessionID: "root",
+            agent: "osuki",
+            model: harness.model,
+            tools: {},
+            system: [],
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "The decorative label has no behavior; it can be removed." }]
+              },
+              { role: "user", content: [{ type: "text", text }] }
+            ]
+          })
+          yield* harness.context(context("Delete it"))
+          const planner = (sessionID?: string) => ({
+            sessionID: "root",
+            agent: "osuki",
+            tool: "subagent",
+            input: { agent: "plan", description: "Plan deletion", prompt: "Plan the edit", sessionID }
+          })
+          expect(yield* harness.before(planner()).pipe(Effect.isFailure)).toBe(true)
+          expect(yield* harness.before(planner("previous-planner")).pipe(Effect.isFailure)).toBe(true)
+          expect(harness.selectedAgents).toHaveLength(0)
+          requiresPlan = true
+          yield* harness.context(context("First give me a plan; do not edit"))
+          yield* harness.before(planner())
+          expect(harness.selectedAgents).toEqual(["plan"])
+          const reopened = yield* makeHarness({ storage: harness.storage })
+          const status = JSON.parse((yield* reopened.status()).content)
+          expect(status.routing.filter((entry: { event: string }) => entry.event === "classification")).toHaveLength(2)
+          expect(status.routing.at(-1)).toMatchObject({ event: "dispatch", agent: "plan" })
+        })
+      )
+    )
+  } finally {
+    fetch.mockRestore()
+  }
 })
 
 test("Jev decision rewrites native dispatch and records the configured agent model", async () => {
   const fetch = spyOn(globalThis, "fetch").mockResolvedValue(
     Response.json({
       answers: {
+        planning: {
+          type: "choice",
+          choice: "skip",
+          confidence: 0.95,
+          probabilities: { skip: 1, required: 0, assess: 0 }
+        },
         complexity: {
           type: "choice",
           choice: "quick",
@@ -534,7 +677,7 @@ test("follow-up questions preserve workflow; additions persist and completion re
       answers: Object.fromEntries(
         Object.entries(request.questions as Record<string, { criteria: Record<string, string> }>).map(
           ([id, question]) => {
-            const choice = id === "message" ? intent : "quick"
+            const choice = id === "message" ? intent : id === "planning" ? "skip" : "quick"
             return [
               id,
               {
@@ -569,7 +712,10 @@ test("follow-up questions preserve workflow; additions persist and completion re
           const question = context("How is it going?")
           yield* harness.context(question)
           yield* harness.context(context("How is it going?"))
-          expect(questions).toEqual([["complexity"], ["message"]])
+          expect(questions).toEqual([
+            ["complexity", "planning"],
+            ["complexity", "planning", "message"]
+          ])
           expect(question.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
           let work = JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content)
           expect(work.objective).toBe("Remove the border")
@@ -713,8 +859,8 @@ test("active goals retain their own checkpoints instead of creating a second wor
           tool: "subagent",
           input: { agent: "plan", description: "Plan", prompt: "Plan the goal" }
         }
-        // The first read reconciles a persisted goal after plugin startup.
-        yield* harness.before(event)
+        // Startup reconciliation pauses persisted goals; a paused goal cannot bypass routing.
+        expect(yield* harness.before(event).pipe(Effect.isFailure)).toBe(true)
         harness.storage.delete("work:root")
         harness.storage.set("goal:root", { ...goal, status: "active" })
         yield* harness.before({ ...event, id: "active-goal-call" })

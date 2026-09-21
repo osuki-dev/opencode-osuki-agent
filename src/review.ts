@@ -4,7 +4,10 @@ import type { JevClient, Questions } from "./jev.ts"
 
 export const ReviewInput = Schema.Struct({
   task: Schema.NonEmptyString,
-  diff: Schema.NonEmptyString,
+  diff: Schema.NonEmptyString.annotate({
+    description:
+      "Complete actual unified diff, including new files, from git diff or diff -u. Include numbered hunk headers such as @@ -1,3 +1,2 @@; shorthand @@ is not a valid diff. Do not invent the diff from memory."
+  }),
   context: Schema.NonEmptyString,
   validation: Schema.Array(
     Schema.Struct({
