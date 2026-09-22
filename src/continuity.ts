@@ -212,7 +212,7 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
                   return yield* new WorkError({
                     message: "Recorded worker is not a child of this session; no interrupt was sent to it."
                   })
-                yield* ctx.session.interrupt({ sessionID, continue: false })
+                yield* ctx.session.interrupt({ sessionID, resume: false })
               }
             return { content: JSON.stringify(next) }
           }).pipe(locks.withPermits(tool.sessionID, 1))
@@ -281,7 +281,7 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
           pending: []
         }
         if (work.status === "paused" || work.status === "cancelled")
-          yield* ctx.session.interrupt({ sessionID: child, continue: false })
+          yield* ctx.session.interrupt({ sessionID: child, resume: false })
         const workers = [
           ...work.workers.filter((worker) => worker.sessionID !== child),
           { sessionID: child, description: input.value.description, revision }

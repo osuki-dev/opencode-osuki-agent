@@ -4,7 +4,7 @@ An Effect-native coordinator with Jev routing, native subagents, project skills,
 
 ## Install in OpenCode
 
-Requires OpenCode 2.0.1 and Bun 1.4.2+.
+Requires OpenCode 2.0.12+ and Bun 1.4.2+.
 
 ```sh
 opencode plugin add @osuki-dev/opencode-osuki-agent@latest
@@ -106,4 +106,4 @@ The plugin registers `osuki-workflow` and uses OpenCode's existing skill discove
 
 ## Dependencies
 
-`effect@4.0.0-rc.112` is the only direct runtime package. `@opencode/plugin@2.0.1` is a development dependency because every SDK import is type-only. Runtime validation uses Effect Schema. Upstream OpenCode packages bring their own transitive dependencies; this project does not import Zod or add a Jev SDK. If runtime SDK helpers such as `Plugin.define` are introduced, move the SDK to runtime dependencies.
+`effect@4.0.0-rc.112` matches the OpenCode SDK and is the only direct runtime package. `@opencode/plugin@2.0.12` is a development dependency because production SDK imports are type-only. Tests validate registrations against the official SDK schemas. Runtime validation uses Effect Schema. Upstream OpenCode packages bring their own transitive dependencies; this project does not import Zod or add a Jev SDK. If runtime SDK helpers such as `Plugin.define` are introduced, move the SDK to runtime dependencies.

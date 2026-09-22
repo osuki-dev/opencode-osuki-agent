@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import type { Context } from "@opencode/plugin/effect/plugin"
+import { Skill } from "@opencode/plugin/effect"
 import { Effect, PubSub, Schema, Stream } from "effect"
 import plugin from "../src/index.ts"
 
@@ -31,6 +32,7 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
   const toolHooks = new Map<string, Hook[]>()
   const sessionHooks = new Map<string, Hook[]>()
   const tools = new Map<string, Tool>()
+  const skills = new Map<string, Skill.Info>()
   const storage = options.storage ?? new Map<string, unknown>()
   const interrupts: string[] = []
   const displayAgent = { id: "osuki", name: "osuki", model: { id: "user-selected-model" } }
@@ -44,9 +46,20 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
   const noTransform = () => Effect.succeed({ dispose: Effect.void })
   const ctx = {
     options: options.pluginOptions ?? {},
-    app: { version: "2.0.1" },
+    app: { version: "2.0.12" },
     command: { transform: noTransform },
-    skill: { transform: noTransform, list: () => Effect.succeed({ data: [] }) },
+    skill: {
+      transform: (transform: (editor: { add(skill: Skill.Info): void }) => void) =>
+        Effect.sync(() => {
+          transform({
+            add: (skill) => {
+              skills.set(skill.id, Schema.decodeUnknownSync(Skill.Info)(skill))
+            }
+          })
+          return { dispose: Effect.void }
+        }),
+      list: () => Effect.succeed({ data: [] })
+    },
     storage: {
       get: (key: string) => Effect.succeed(storage.get(key)),
       set: (key: string, value: unknown) =>
@@ -128,6 +141,7 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
     interrupts,
     displayAgent,
     tools,
+    skills,
     model,
     selectedAgents,
     permission: (event: Record<string, unknown>) => runHooks(permissionHooks, "evaluate", event),
@@ -138,6 +152,15 @@ const makeHarness = Effect.fn("test.makePluginHarness")(function* (
       tools.get(name)!.execute(input, { sessionID: "root", agent }),
     status: () => tools.get("osuki_status")!.execute({}, { sessionID: "root", agent: "osuki" })
   }
+})
+
+test("workflow skill uses the current host schema and a real packaged path", async () => {
+  const harness = await Effect.runPromise(Effect.scoped(makeHarness()))
+  const skill = harness.skills.get("osuki-workflow")!
+  expect(skill.name).toBe(Skill.Name.make("osuki-workflow"))
+  expect(skill).not.toHaveProperty("location")
+  expect(await Bun.file(skill.path).exists()).toBe(true)
+  expect(skill.content).toContain("/osuki-goal")
 })
 
 test("routing and review expose JSON-only schemas and validate arguments locally", async () => {

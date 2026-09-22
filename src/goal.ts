@@ -171,7 +171,7 @@ export const installGoals: (
       delete goal.pendingID
       yield* save(goal)
     }).pipe(locks.withPermits(sessionID, 1))
-    yield* ctx.session.interrupt({ sessionID, continue: false })
+    yield* ctx.session.interrupt({ sessionID, resume: false })
   })
 
   yield* ctx.command.transform((editor) => {
