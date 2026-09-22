@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.4
+
+### Patch Changes
+
+- [#16](https://github.com/osuki-dev/opencode-osuki-agent/pull/16) [`5742476`](https://github.com/osuki-dev/opencode-osuki-agent/commit/57424762993174082e0cd8bb5ed24b0856091320) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Support OpenCode 2.0.12 skill registration and interruption controls. Validate plugin skills against the official SDK schema and require OpenCode 2.0.12 or newer.
+
 ## 0.2.3
 
 ### Patch Changes
