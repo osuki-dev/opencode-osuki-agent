@@ -177,7 +177,7 @@ test("user interruption pauses without continuation; explicit resume works", asy
     expect(h.prompts).toHaveLength(2)
     await h.command("osuki-goal-cancel")
     expect(h.goal().status).toBe("cancelled")
-    expect(h.interrupts).toEqual([{ sessionID: "session", continue: false }])
+    expect(h.interrupts).toEqual([{ sessionID: "session", resume: false }])
   } finally {
     await h.cleanup()
   }

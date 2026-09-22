@@ -108,9 +108,9 @@ export default {
         id: "osuki-workflow" as Skill.Info["id"],
         name: "osuki-workflow" as Skill.Info["name"],
         description: "Development and analysis routing, native subagents and goal acceptance",
-        location: fileURLToPath(
+        path: fileURLToPath(
           new URL("../skills/osuki-workflow/SKILL.md", import.meta.url)
-        ) as Skill.Info["location"],
+        ) as Skill.Info["path"],
         content: workflow
       })
     )
