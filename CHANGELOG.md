@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.5
+
+### Patch Changes
+
+- [#18](https://github.com/osuki-dev/opencode-osuki-agent/pull/18) [`9a4c0dc`](https://github.com/osuki-dev/opencode-osuki-agent/commit/9a4c0dc4ad60dc2c48357351668b05cd09447d05) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Reduce unnecessary planning and reviewer escalation for bounded edits, delegate confidently routed implementation work, and preserve request routing through OpenCode transport recovery.
+
 ## 0.2.4
 
 ### Patch Changes
