@@ -105,7 +105,7 @@ export const makeContinuity = Effect.fn("osuki.continuity")(function* (
   ) {
     return yield* Effect.gen(function* () {
       const work = yield* read(sessionID)
-      if (!unfinished(work) || !work) return work
+      if (!work || work.status !== "active") return work
       const id = messageKey(text)
       if (work.lastMessage?.id === id) return work
       const decision =

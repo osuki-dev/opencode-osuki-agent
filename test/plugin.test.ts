@@ -422,11 +422,13 @@ test("initial requests batch workflow and tool routing, cache decisions, and rec
 })
 
 test("lightweight review follows workflow eligibility and risk reassessment updates cached context", async () => {
+  let complexityConfidence = 0.95
+  let complexityChoice = "quick"
   const respond = async (_url: unknown, init?: RequestInit) => {
     const request = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
     const risky = String(request.state).includes("security change")
     const choices: Record<string, string> = {
-      complexity: risky ? "deep" : "quick",
+      complexity: risky ? "deep" : complexityChoice,
       planning: risky ? "required" : "skip",
       scope: "bounded",
       correctness: "satisfied",
@@ -440,7 +442,7 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
             {
               type: "choice",
               choice: choices[id],
-              confidence: 0.95,
+              confidence: id === "complexity" ? complexityConfidence : 0.95,
               probabilities: Object.fromEntries(
                 Object.keys(question.criteria).map((key) => [key, key === choices[id] ? 1 : 0])
               )
@@ -494,6 +496,20 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
           )
           expect((yield* harness.before(reviewer()).pipe(Effect.exit))._tag).toBe("Failure")
           expect(harness.selectedAgents).toHaveLength(0)
+          complexityConfidence = 0.7
+          yield* harness.context({
+            ...event(),
+            messages: [{ role: "user", id: "second-request", content: [{ type: "text", text: "Remove border" }] }]
+          })
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("lightweight-passed")
+          expect((yield* harness.before(reviewer()).pipe(Effect.exit))._tag).toBe("Failure")
+          complexityConfidence = 0.95
+          complexityChoice = "standard"
+          yield* harness.context({
+            ...event(),
+            messages: [{ role: "user", id: "third-request", content: [{ type: "text", text: "Remove border" }] }]
+          })
+          expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("lightweight-passed")
           const goal = {
             id: "goal-test",
             sessionID: "root",
@@ -514,13 +530,16 @@ test("lightweight review follows workflow eligibility and risk reassessment upda
           const denied = yield* harness.call("osuki_review", input, "general").pipe(Effect.exit)
           expect(denied._tag).toBe("Failure")
           yield* harness.call("osuki_route", { role: "implement", task: "Discovered security change" })
-          const refreshed = event()
+          const refreshed = {
+            ...event(),
+            messages: [{ role: "user", id: "third-request", content: [{ type: "text", text: "Remove border" }] }]
+          }
           yield* harness.context(refreshed)
           expect(refreshed.system.some((part) => part.text.includes('"planning":"required"'))).toBe(true)
           expect(JSON.parse((yield* harness.call("osuki_review", input)).content).outcome).toBe("reviewer-required")
           yield* harness.before(reviewer())
           expect(harness.selectedAgents).toEqual(["osuki-reviewer", "osuki-reviewer"])
-          expect(fetch).toHaveBeenCalledTimes(3)
+          expect(fetch).toHaveBeenCalledTimes(7)
         })
       )
     )
@@ -926,6 +945,63 @@ test("native planning is blocked for direct work but allowed for explicit planni
   }
 })
 
+test("transport recovery keeps the current request instead of routing a new one", async () => {
+  const fetch = spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({
+      answers: {
+        complexity: {
+          type: "choice",
+          choice: "quick",
+          confidence: 0.98,
+          probabilities: { quick: 1, standard: 0, deep: 0 }
+        },
+        planning: {
+          type: "choice",
+          choice: "skip",
+          confidence: 0.98,
+          probabilities: { skip: 1, required: 0, assess: 0 }
+        }
+      }
+    })
+  )
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ credentials: true })
+          const user = { role: "user", content: [{ type: "text", text: "Remove the border" }] }
+          const context = (messages: unknown[]) => ({
+            sessionID: "root",
+            agent: "osuki",
+            model: harness.model,
+            tools: {},
+            system: [],
+            messages
+          })
+          yield* harness.context(context([user]))
+          const recovery = {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "The previous response was interrupted. Continue from where you left off without repeating completed content."
+              }
+            ]
+          }
+          const resumed = context([user, recovery])
+          yield* harness.context(resumed)
+          expect(fetch).toHaveBeenCalledTimes(1)
+          expect(resumed.system.some((part: { text: string }) => part.text.includes('"planning":"skip"'))).toBe(true)
+          const status = JSON.parse((yield* harness.status()).content)
+          expect(status.routing.filter((entry: { event: string }) => entry.event === "classification")).toHaveLength(1)
+        })
+      )
+    )
+  } finally {
+    fetch.mockRestore()
+  }
+})
+
 test("Jev decision rewrites native dispatch and records the configured agent model", async () => {
   const fetch = spyOn(globalThis, "fetch").mockResolvedValue(
     Response.json({
@@ -1277,6 +1353,15 @@ test("native user interruptions pause work but superseded turns do not", async (
         })
         yield* Effect.sleep("5 millis")
         expect(JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content).status).toBe("paused")
+        yield* harness.context({
+          sessionID: "root",
+          agent: "osuki",
+          model: harness.model,
+          tools: {},
+          system: [],
+          messages: [{ role: "user", content: [{ type: "text", text: "A separate question" }] }]
+        })
+        expect(JSON.parse((yield* harness.call("osuki_work", { action: "status" })).content).pending).toEqual([])
         expect(harness.interrupts).toEqual([])
       })
     )

@@ -45,6 +45,14 @@ test("a bounded validated diff batches review criteria and needs no coding-model
   expect(result.outcome).toBe("lightweight-passed")
   expect(result.goalReceipt).toBe(false)
   expect(calls).toBe(1)
+  const optionalUnavailable = {
+    ...input,
+    validation: [...input.validation, { check: "Optional stylelint", result: "unavailable" as const, evidence: "No stylelint configuration" }]
+  }
+  const optional = await Effect.runPromise(
+    reviewChange({ ...jev, evaluate: () => Effect.succeed(passing()) }, optionalUnavailable, config, true)
+  )
+  expect(optional.outcome).toBe("lightweight-passed")
 })
 
 test("only ineligible or oversized work escalates; missing and failed checks request evidence without a Jev call", async () => {
@@ -118,14 +126,14 @@ test("a small reviewed change with a blocked broad check remains a validation bl
         ...input,
         validation: [
           ...input.validation,
-          { check: "Required integration suite", result: "unavailable", evidence: "Dependency service is unreachable" }
+          { check: "Required integration suite", result: "unavailable", evidence: "Dependency service is unreachable", required: true }
         ]
       },
       config,
       true
     )
   )
-  expect(calls).toBe(1)
+  expect(calls).toBe(0)
   expect(result.outcome).toBe("evidence-required")
   expect(result).not.toHaveProperty("agent")
   expect(result.goalReceipt).toBe(false)

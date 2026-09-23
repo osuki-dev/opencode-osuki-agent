@@ -17,12 +17,12 @@ export function dispatchDenial(
   if (
     agent === config.agents.review &&
     (workflow?.decision.planning === "assess" ||
-      (workflow?.decision.tier === "quick" && workflow.decision.planning === "skip")) &&
+      workflow?.decision.planning === "skip") &&
     workflow?.review?.outcome !== "reviewer-required"
   )
     return {
       event: "reviewer-denied",
       message:
-        "Unresolved routing or a bounded edit does not justify the expensive reviewer. Use osuki_route to assess uncertain scope, then osuki_review for eligible edits; collect missing evidence or resolve local findings first. Unavailable Jev or E2E is not a code-risk escalation."
+        "Unresolved routing or an unreviewed diff does not justify the expensive reviewer. With planning=assess, inspect and use osuki_route with evidence. With planning=skip, use osuki_review on the actual diff; escalate only if it returns reviewer-required. Do not retry unchanged evidence."
     }
 }

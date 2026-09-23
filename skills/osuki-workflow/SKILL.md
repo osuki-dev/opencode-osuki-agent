@@ -15,14 +15,15 @@ Choose validation by impact. Documentation, cosmetic and mechanical edits usuall
 
 ## Review
 
-For eligible quick edits, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Obtain the unified diff from git diff or diff -u, not a handwritten summary. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
+For a bounded edit with planning=skip, including one whose initial complexity rating was uncertain, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Obtain the unified diff from git diff or diff -u, not a handwritten summary. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
+Mark only explicit user or repository checks as `required`. An unavailable optional tool does not require another test when focused evidence already covers the change; an unavailable required check remains a blocker.
 
 - lightweight-passed: no coding-model reviewer is needed outside goals.
 - evidence-required: gather only missing relevant evidence. If Jev is unavailable, keep passed checks and report review pending; do not invent more work or poll the provider.
 - changes-required: inspect the flagged issue, correct confirmed defects and recheck.
 - reviewer-required: use the configured independent foreground reviewer.
 
-Do not retry unchanged evidence, escalate merely because infrastructure is unavailable, or treat a prior pass as covering later edits. Normal implementation and active goals retain independent review.
+Do not retry unchanged evidence, escalate merely because infrastructure is unavailable, or treat a prior pass as covering later edits. Risky or oversized changes and active goals retain independent review.
 
 ## Goals
 
@@ -30,7 +31,7 @@ When /osuki-goal is active, retain acceptance criteria, obtain the native planne
 
 ## Tools and children
 
-Reuse native exploration, planning and worker roles. Give children scope, file ownership, relevant facts, available skills and expected evidence; they do not inherit the full conversation. Parallelize only independent work.
+Reuse native exploration, planning and worker roles. When Jev confidently selects standard or deep implementation, dispatch a bounded worker before editing and keep the coordinator focused on assignment and integration. An uncertain fallback tier does not itself require delegation. Give children scope, file ownership, relevant facts, available skills and expected evidence; they do not inherit the full conversation. Parallelize only independent work. Reuse a worker's evidence instead of rereading the same files in the coordinator.
 
 Outside goal mode, record substantial work with osuki_work start; tiny single-step edits need no task record. Use native background workers when the coordinator should remain available; required planner/reviewer receipts remain foreground. For follow-ups or resuming unfinished work, read [references/continuity.md](references/continuity.md). Complete the record after integrating results and resolving pending requests. Active goals use their existing checkpoints instead.
 
