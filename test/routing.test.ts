@@ -245,6 +245,26 @@ test("planning is independent of model tier; uncertainty requests assessment", a
   )
 })
 
+test("confident planning survives an uncertain complexity rating", () => {
+  const uncertainTier = {
+    ...decision,
+    choice: "quick",
+    confidence: 0.7,
+    probabilities: { quick: 0.7, standard: 0.2, deep: 0.1 }
+  }
+  expect(implementationWorkflow(uncertainTier, config, planning)).toEqual({
+    tier: "standard",
+    planning: "skip",
+    source: "fallback"
+  })
+  expect(implementationWorkflow(uncertainTier, config, { ...planning, choice: "required" }).planning).toBe(
+    "required"
+  )
+  expect(implementationWorkflow(uncertainTier, config, { ...planning, confidence: 0.7 }).planning).toBe(
+    "assess"
+  )
+})
+
 test("low confidence retains tools and high confidence preserves recovery and goal tools", () => {
   const names = ["a", "b", "c", "d", "execute", "subagent", "osuki_goal", "osuki_review_report", "read"]
   const answer = {
