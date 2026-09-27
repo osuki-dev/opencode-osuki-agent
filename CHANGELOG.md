@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.6
+
+### Patch Changes
+
+- [#20](https://github.com/osuki-dev/opencode-osuki-agent/pull/20) [`ce8b971`](https://github.com/osuki-dev/opencode-osuki-agent/commit/ce8b971ce6e5288ca248bde561f541d0ec9d10bf) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Stop treating automatic goal continuations as new user requests, and keep growing goal bookkeeping and subagent output out of repeated model context. Preserve full acceptance evidence in durable goal state and expose it on demand.
+
 ## 0.2.5
 
 ### Patch Changes
