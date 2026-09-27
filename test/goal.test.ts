@@ -369,8 +369,10 @@ test("configured coordinator and planner aliases are used instead of hardcoded a
   const h = await harness(undefined, { coordinator: "captain", agents: { plan: "strategist", review: "auditor" } })
   try {
     await h.command("osuki-goal", "Build it")
-    expect(h.prompts[0].text).toContain("Run strategist")
-    expect(h.prompts[0].text).toContain("auditor child")
+    const context = { sessionID: "session", agent: "captain", tools: {}, system: [] as { text: string }[] }
+    await h.hooks.get("context")!(context)
+    expect(context.system[0]?.text).toContain("strategist")
+    expect(context.system[0]?.text).toContain("auditor")
     await h.hooks.get("execute.after")!({
       sessionID: "session",
       agent: "captain",
@@ -382,6 +384,42 @@ test("configured coordinator and planner aliases are used instead of hardcoded a
     })
     expect(h.goal().receipts[0].role).toBe("planner")
     expect(String(h.goal().receipts[0].childID)).toBe("plan-child")
+  } finally {
+    await h.cleanup()
+  }
+})
+test("goal continuation and model context stay compact without losing acceptance evidence", async () => {
+  const h = await harness()
+  try {
+    await h.command("osuki-goal", "Build it")
+    const large = "e".repeat(10_000)
+    const goal = h.goal()
+    h.storage.set("goal:session", {
+      ...goal,
+      acceptance: [{ criterion: "Works", evidence: large }],
+      receipts: [{ id: "planner-call", role: "planner", evidence: large, revision: 0, childID: "plan-child" }],
+      processed: Array.from({ length: 100 }, (_, index) => `processed-${index}`),
+      progressKeys: Array.from({ length: 100 }, (_, index) => `progress-${index}`)
+    })
+    await h.event("session.execution.succeeded", "next-round")
+    expect(h.prompts.at(-1)?.text.length).toBeLessThan(300)
+    expect(h.prompts.at(-1)?.text).not.toContain(large)
+    const context = { sessionID: "session", agent: "osuki", tools: {}, system: [] as { text: string }[] }
+    await h.hooks.get("context")!(context)
+    const system = context.system.map((part) => part.text).join("\n")
+    expect(system.length).toBeLessThan(3_000)
+    expect(system).toContain("planner-call")
+    expect(system).toContain("Works")
+    expect(system).not.toContain("processed-0")
+    expect(system).not.toContain(large)
+    const status = JSON.parse(
+      (await h.tools.get("osuki_goal")!.execute({ action: "status" }, { sessionID: "session", agent: "osuki" }))
+        .content
+    )
+    expect(status.acceptance[0].evidence).toBe(large)
+    expect(status.receipts[0]).toEqual({ id: "planner-call", role: "planner", revision: 0, childID: "plan-child" })
+    expect(status).not.toHaveProperty("progressKeys")
+    expect(status).not.toHaveProperty("processed")
   } finally {
     await h.cleanup()
   }
