@@ -115,7 +115,7 @@ export const routeTask = Effect.fn("routeTask")(function* (
 })
 
 export function compactState(messages: SessionContext["messages"]) {
-  return messages.slice(-8).map((m) => ({
+  return messages.filter((message) => !isGoalContinuation(message)).slice(-8).map((m) => ({
     role: m.role,
     content: m.content
       .filter((p) => p.type === "text" || p.type === "tool-result")
@@ -127,6 +127,18 @@ export function compactState(messages: SessionContext["messages"]) {
             : {}
       )
   }))
+}
+
+export function isGoalContinuation(message: SessionContext["messages"][number]) {
+  if (message.role !== "user") return false
+  if (message.metadata?.source === "osuki-goal") return true
+  return message.content.some(
+    (part) =>
+      part.type === "text" &&
+      part.text.startsWith("Continue the active goal: ") &&
+      (part.text.includes("A final assistant reply does not complete a goal.") ||
+        part.text.includes("\nGoal revision: "))
+  )
 }
 
 const recoveryTool = /execute|subagent|question|skill|search|osuki_|read|grep|glob/

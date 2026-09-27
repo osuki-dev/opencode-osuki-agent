@@ -402,6 +402,21 @@ test("initial requests batch workflow and tool routing, cache decisions, and rec
           yield* harness.context(same)
           expect(questionSets).toHaveLength(1)
           expect(same.system.some((part) => part.text.includes('"planning":"skip"'))).toBe(true)
+          for (const metadata of [{ source: "osuki-goal" }, undefined]) {
+            const continued = event("Remove the border")
+            continued.messages.push({
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Continue the active goal: Remove the border\nGoal revision: 12. Continue from verified progress."
+                }
+              ],
+              ...(metadata ? { metadata } : {})
+            } as (typeof continued.messages)[number])
+            yield* harness.context(continued)
+            expect(questionSets).toHaveLength(1)
+          }
           const changed = event("Redesign the authentication architecture")
           yield* harness.context(changed)
           expect(questionSets[1]).toEqual(["complexity", "planning"])

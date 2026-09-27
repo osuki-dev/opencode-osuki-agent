@@ -13,6 +13,7 @@ import {
   canShortlist,
   compactState,
   implementationWorkflow,
+  isGoalContinuation,
   routeTask,
   shortlist,
   ROUTE_QUESTIONS,
@@ -420,10 +421,12 @@ export default {
           text: sharedInstructions
         })
         const names = Object.keys(event.tools)
-        const routeTools = canShortlist(names, config.routing)
+        const goalActive = event.agent === config.coordinator && (yield* goals.active(event.sessionID))
+        const routeTools = !goalActive && canShortlist(names, config.routing)
         const users = event.messages.filter(
           (message) =>
             message.role === "user" &&
+            !isGoalContinuation(message) &&
             !(
               message.content.length === 1 &&
               message.content[0]?.type === "text" &&

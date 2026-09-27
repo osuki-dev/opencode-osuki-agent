@@ -4,7 +4,7 @@ import { Effect, Option, PartitionedSemaphore, Schema, Stream, type Scope } from
 import type { RoutingConfig } from "./config.ts"
 import { toolInputSchema } from "./tool-schema.ts"
 
-export const GOAL_INSTRUCTIONS = `Continue active goals until their acceptance criteria are verified. Run osuki-planner as a foreground native subagent before implementation. Checkpoint with a nonempty acceptance list of {criterion,evidence}; retain every established criterion in subsequent checkpoints. Run tests before checkpointing. Start a fresh foreground osuki-reviewer child after the final checkpoint. Reviewers must use read-only inspection tools, not shell, and call osuki_review_report with verdict passed or changes_requested, unresolved findings, and concrete evidence. Complete with observed plannerCallID and reviewerCallID from osuki_goal status. Any subsequent edit, shell invocation, or worker dispatch invalidates review. Report blocked when essential input is unavailable. Only the user can resume paused or blocked goals. Three consecutive turns without new successful tool work or changed checkpoint evidence block the goal. A final assistant reply does not complete a goal.`
+export const GOAL_INSTRUCTIONS = `Continue active goals until their acceptance criteria are verified. Obtain one foreground native osuki-planner receipt before implementation; reuse it for this goal unless new design or risk warrants replanning. Checkpoint with a nonempty acceptance list of {criterion,evidence}; retain every established criterion in subsequent checkpoints. Run relevant tests before checkpointing. Start a fresh foreground osuki-reviewer child after the final checkpoint. Reviewers must use read-only inspection tools, not shell, and call osuki_review_report with verdict passed or changes_requested, unresolved findings, and concrete evidence. Complete with observed plannerCallID and reviewerCallID from osuki_goal status. Any subsequent edit, shell invocation, or worker dispatch invalidates review. Report blocked when essential input is unavailable. Only the user can resume paused or blocked goals. Three consecutive turns without new successful tool work or changed checkpoint evidence block the goal. A final assistant reply does not complete a goal.`
 
 const NonBlank = Schema.NonEmptyString.check(Schema.isPattern(/\S/))
 const Natural = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
@@ -47,6 +47,32 @@ export const GoalSchema = Schema.Struct({
   progressKeys: Schema.mutableKey(Schema.optional(StringList))
 })
 export type Goal = typeof GoalSchema.Type
+const goalStatus = (goal: Goal) => ({
+  id: goal.id,
+  objective: goal.objective,
+  status: goal.status,
+  revision: goal.revision,
+  acceptance: goal.acceptance,
+  receipts: goal.receipts.map(({ id, role, revision, childID }) => ({ id, role, revision, childID })),
+  checkpointRevision: goal.checkpointRevision,
+  review: goal.review,
+  rounds: goal.rounds,
+  reason: goal.reason
+})
+const goalContext = (goal: Goal) => ({
+  id: goal.id,
+  objective: goal.objective,
+  status: goal.status,
+  revision: goal.revision,
+  acceptance: goal.acceptance.map(({ criterion, evidence }) => ({ criterion, evidence: evidence.slice(0, 300) })),
+  plannerCallID: goal.receipts.find((receipt) => receipt.role === "planner")?.id,
+  reviewerCallID: goal.receipts.slice().reverse().find(
+    (receipt) => receipt.role === "reviewer" && receipt.revision === goal.revision
+  )?.id,
+  checkpointRevision: goal.checkpointRevision,
+  review: goal.review && { verdict: goal.review.verdict, findings: goal.review.findings },
+  reason: goal.reason
+})
 export const parseGoal = Schema.decodeUnknownEffect(Schema.UndefinedOr(GoalSchema))
 const encodeGoal = Schema.encodeEffect(GoalSchema)
 const GoalInput = Schema.Struct({
@@ -155,7 +181,7 @@ export const installGoals: (
       sessionID: goal.sessionID,
       id,
       delivery: "queue",
-      text: `Continue the active goal: ${goal.objective}\n${instructions}\nCurrent acceptance: ${JSON.stringify(goal.acceptance)}`,
+      text: `Continue the active goal: ${goal.objective}\nGoal revision: ${goal.revision}. Continue from verified progress; inspect osuki_goal status only when you need full evidence or receipt IDs.`,
       metadata: { source: "osuki-goal", goalID: goal.id, revision: goal.revision }
     })
     delete goal.pendingID
@@ -186,7 +212,7 @@ export const installGoals: (
           yield* Effect.gen(function* () {
             let goal = yield* read(sessionID)
             if (name === "goal-status") {
-              yield* ctx.session.synthetic({ sessionID, text: JSON.stringify(goal ?? { status: "none" }) })
+              yield* ctx.session.synthetic({ sessionID, text: JSON.stringify(goal ? goalStatus(goal) : { status: "none" }) })
               return
             }
             if (name === "goal") {
@@ -233,7 +259,7 @@ export const installGoals: (
         return yield* Effect.gen(function* () {
           const goal = yield* read(tool.sessionID)
           if (!goal) return { content: JSON.stringify({ status: "none" }) }
-          if (args.action === "status") return { content: JSON.stringify(goal) }
+          if (args.action === "status") return { content: JSON.stringify(goalStatus(goal)) }
           if (goal.status !== "active") return yield* failure(`Goal is ${goal.status}; only the user may resume it.`)
           if (args.action === "checkpoint") {
             const acceptance = args.acceptance
@@ -262,7 +288,7 @@ export const installGoals: (
             goal.revision++
           }
           yield* save(goal)
-          return { content: JSON.stringify(goal) }
+          return { content: JSON.stringify(goalStatus(goal)) }
         }).pipe(locks.withPermits(tool.sessionID, 1))
       }, Effect.mapError(asToolError))
     })
@@ -424,7 +450,7 @@ export const installGoals: (
         return
       }
       const goal = yield* read(event.sessionID).pipe(locks.withPermits(event.sessionID, 1))
-      if (goal) event.system.push({ type: "text", text: `Goal state: ${JSON.stringify(goal)}\n${instructions}` })
+      if (goal) event.system.push({ type: "text", text: `Goal state: ${JSON.stringify(goalContext(goal))}\n${instructions}` })
     }, Effect.catch(logFailure))
   )
 
