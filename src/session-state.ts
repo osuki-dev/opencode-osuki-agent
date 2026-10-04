@@ -12,6 +12,7 @@ export interface Workflow {
   readonly epoch: number
   readonly decision: Decision
   readonly review?: { readonly outcome: ReviewOutcome; readonly evidence: string }
+  readonly reviewerRequired?: { readonly evidence: string }
 }
 export interface ToolRouting {
   readonly before: number
@@ -90,7 +91,8 @@ export function makeSessionState() {
         epoch: invalidated || !previous ? ++epoch : previous.epoch,
         decision:
           !changed && previous ? previous.decision : { tier: "standard", planning: "assess", source: "fallback" },
-        review: invalidated ? undefined : previous?.review
+        review: invalidated ? undefined : previous?.review,
+        reviewerRequired: invalidated ? undefined : previous?.reviewerRequired
       }
       update(id, { workflow, ...(changed ? { lastRoute: undefined, toolRouting: undefined } : {}) })
       return { workflow, changed }
@@ -111,7 +113,14 @@ export function makeSessionState() {
     reviewed(id: string, expected: number, review: NonNullable<Workflow["review"]>) {
       const workflow = entries.get(id)?.workflow
       if (!workflow || !current(id, expected) || mutating(id)) return false
-      update(id, { workflow: { ...workflow, review } })
+      // Escalation requires independent inspection; it does not approve a previous diff.
+      update(id, {
+        workflow: {
+          ...workflow,
+          review,
+          reviewerRequired: review.outcome === "reviewer-required" ? { evidence: review.evidence } : undefined
+        }
+      })
       return true
     },
     routed: (id: string, route: unknown) => update(id, { lastRoute: route }),

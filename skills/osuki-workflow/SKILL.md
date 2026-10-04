@@ -21,7 +21,7 @@ Mark only explicit user or repository checks as `required`. An unavailable optio
 - lightweight-passed: no coding-model reviewer is needed outside goals.
 - evidence-required: gather only missing relevant evidence. If Jev is unavailable, keep passed checks and report review pending; do not invent more work or poll the provider.
 - changes-required: inspect the flagged issue, correct confirmed defects and recheck.
-- reviewer-required: use the configured independent foreground reviewer.
+- reviewer-required: use the configured independent foreground reviewer on the latest settled diff. Preparing review files or finishing tool work does not remove this requirement; do not repeat lightweight review just to regain dispatch permission.
 
 Do not retry unchanged evidence, escalate merely because infrastructure is unavailable, or treat a prior pass as covering later edits. Risky or oversized changes and active goals retain independent review.
 

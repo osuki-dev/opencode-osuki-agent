@@ -276,7 +276,8 @@ export default {
               decision: state?.workflow && {
                 request: state.workflow.request,
                 epoch: state.workflow.epoch,
-                review: state.workflow.review
+                review: state.workflow.review,
+                reviewerRequired: state.workflow.reviewerRequired
               },
               routing: yield* ctx.storage.get(`routing:${tool.sessionID}`).pipe(Effect.orDie),
               work: yield* continuity.read(tool.sessionID).pipe(
@@ -502,7 +503,7 @@ export default {
         if (event.agent === config.coordinator && workflow && workflow.task === objective) {
           event.system.push({
             type: "text",
-            text: `Current request: ${JSON.stringify(workflow.decision)}; review: ${workflow.review?.outcome ?? "not-reviewed"}. skip: no planner; assess: inspect briefly, then use osuki_route with evidence if needed; required: foreground planner. ${workflow.decision.source === "jev" && workflow.decision.tier !== "quick" ? "For authorized edits, send implementation to the routed worker before changing files; coordinate and verify its result." : "Handle bounded edits directly; delegate only when useful."} For bounded edits with skip, use osuki_review on the actual diff; escalate only on reviewer-required. Questions are read-only. Reassess only changed scope or risk. Honor project gates and goal receipts.`
+            text: `Current request: ${JSON.stringify(workflow.decision)}; review: ${workflow.review?.outcome ?? "not-reviewed"}; independent reviewer required: ${Boolean(workflow.reviewerRequired)}. skip: no planner; assess: inspect briefly, then use osuki_route with evidence if needed; required: foreground planner. ${workflow.decision.source === "jev" && workflow.decision.tier !== "quick" ? "For authorized edits, send implementation to the routed worker before changing files; coordinate and verify its result." : "Handle bounded edits directly; delegate only when useful."} For bounded edits with skip, use osuki_review on the actual diff; escalate only on reviewer-required. An established reviewer requirement survives tool work for this request; review the latest settled diff without repeating lightweight review. Questions are read-only. Reassess only changed scope or risk. Honor project gates and goal receipts.`
           })
         }
         if (!routeTools) {
