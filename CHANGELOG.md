@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.7
+
+### Patch Changes
+
+- [#22](https://github.com/osuki-dev/opencode-osuki-agent/pull/22) [`ff524ba`](https://github.com/osuki-dev/opencode-osuki-agent/commit/ff524ba69f049638217dae55f2e95a0f75ced977) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Preserve the requirement for independent review after review preparation or implementation tools finish. Keep it separate from invalidated review results, reject dispatch during concurrent writes, and reset it when the request or work revision changes.
+
 ## 0.2.6
 
 ### Patch Changes
