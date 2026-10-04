@@ -27,9 +27,26 @@ test("new requests, work revisions and mutations reject stale asynchronous decis
     if (change === "mutation") state.invalidate("root")
     else state.observe("root", { ...input, ...(change === "request" ? { request: "request-2" } : { revision: 1 }) })
     expect(state.get("root")?.workflow?.review).toBeUndefined()
+    expect(Boolean(state.get("root")?.workflow?.reviewerRequired)).toBe(change === "mutation")
     expect(state.decide("root", old.epoch, quick)).toBe(false)
     expect(state.reviewed("root", old.epoch, { outcome: "lightweight-passed", evidence: "old-hash" })).toBe(false)
   }
+})
+
+test("independent review requirements survive settled tool work but fresh review replaces them", () => {
+  const state = makeSessionState()
+  const workflow = state.observe("root", input).workflow
+  state.reviewed("root", workflow.epoch, { outcome: "reviewer-required", evidence: "oversized-diff" })
+  state.mutation("root", call("shell-1"), true)
+  expect(state.get("root")?.workflow?.review).toBeUndefined()
+  expect(state.get("root")?.workflow?.reviewerRequired?.evidence).toBe("oversized-diff")
+  expect(state.canDispatch("root", state.get("root")!.workflow!, true)).toBe(false)
+  state.settled(call("shell-1"))
+  const settled = state.observe("root", input).workflow
+  expect(settled.reviewerRequired?.evidence).toBe("oversized-diff")
+  expect(state.canDispatch("root", settled, true)).toBe(true)
+  state.reviewed("root", settled.epoch, { outcome: "lightweight-passed", evidence: "new-diff" })
+  expect(state.get("root")?.workflow?.reviewerRequired).toBeUndefined()
 })
 
 test("diagnostics are session-local and eviction cannot revive an old epoch", () => {

@@ -885,13 +885,70 @@ test("reviewer authorization is rechecked after agent lookup and audit writes", 
           expect(mutations).toBe(1)
           expect(harness.selectedAgents).toEqual(["osuki-reviewer"])
           expect(JSON.parse((yield* harness.status()).content).decision.review).toBeUndefined()
-          yield* harness.call("osuki_review", input)
+          expect(JSON.parse((yield* harness.status()).content).decision.reviewerRequired).toBeDefined()
           yield* harness.before(event)
           expect(harness.selectedAgents).toEqual(["osuki-reviewer", "osuki-reviewer"])
         })
       )
     )
   }
+})
+
+test("oversized review permits native reviewer dispatch after shell preparation without another review", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        const context = (id: string) => ({
+          sessionID: "root",
+          agent: "osuki",
+          model: harness.model,
+          tools: {},
+          system: [] as { type: string; text: string }[],
+          messages: [{ role: "user", id, content: [{ type: "text", text: "Review the theme changes" }] }]
+        })
+        yield* harness.context(context("request-1"))
+        yield* harness.call("osuki_route", {
+          task: "Review the theme changes",
+          role: "implement",
+          assessment: { tier: "standard", planning: "skip", evidence: "Settled theme configuration changes" }
+        })
+        expect(JSON.parse((yield* harness.call("osuki_review", {
+          task: "Review the theme changes",
+          diff: "@@ -1 +1 @@\n-logo: default\n+logo: hidden",
+          context: "x".repeat(20_001),
+          validation: []
+        })).content).outcome).toBe("reviewer-required")
+        const reviewer = {
+          sessionID: "root",
+          agent: "osuki",
+          tool: "subagent",
+          input: { agent: "osuki-reviewer", description: "Review", prompt: "Inspect the latest settled diff" }
+        }
+        for (const status of ["completed", "error"]) {
+          const shell = {
+            id: `prepare-${status}`,
+            sessionID: "root",
+            agent: "osuki",
+            tool: "shell",
+            input: { command: "cp review.diff .review.diff" }
+          }
+          yield* harness.before(shell)
+          expect(yield* harness.before(reviewer).pipe(Effect.isFailure)).toBe(true)
+          yield* harness.after({ ...shell, status })
+          const next = context("request-1")
+          yield* harness.context(next)
+          expect(next.system.some((part) => part.text.includes("independent reviewer required: true"))).toBe(true)
+          yield* harness.before(reviewer)
+        }
+        const reviews = harness.storage.get("routing:root") as { event: string }[]
+        expect(reviews.filter((entry) => entry.event === "review")).toHaveLength(1)
+        yield* harness.context(context("request-2"))
+        expect(JSON.parse((yield* harness.status()).content).decision.reviewerRequired).toBeUndefined()
+        expect(yield* harness.before(reviewer).pipe(Effect.isFailure)).toBe(true)
+      })
+    )
+  )
 })
 
 test("native planning is blocked for direct work but allowed for explicit planning and goals", async () => {

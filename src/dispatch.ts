@@ -18,7 +18,7 @@ export function dispatchDenial(
     agent === config.agents.review &&
     (workflow?.decision.planning === "assess" ||
       workflow?.decision.planning === "skip") &&
-    workflow?.review?.outcome !== "reviewer-required"
+    !workflow?.reviewerRequired
   )
     return {
       event: "reviewer-denied",
