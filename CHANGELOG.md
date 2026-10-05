@@ -1,5 +1,11 @@
 # @osuki-dev/opencode-osuki-agent
 
+## 0.2.8
+
+### Patch Changes
+
+- [#24](https://github.com/osuki-dev/opencode-osuki-agent/pull/24) [`d1302c7`](https://github.com/osuki-dev/opencode-osuki-agent/commit/d1302c7625e5486f75e4e1047a8f205256c8f78f) Thanks [@ryuhzk](https://github.com/ryuhzk)! - Apply native dispatch gates to routing recommendations and keep read-only analysis separate from planning. Unresolved review routing now reports the required workflow assessment instead of recommending an ineligible reviewer.
+
 ## 0.2.7
 
 ### Patch Changes
