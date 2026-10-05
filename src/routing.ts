@@ -89,16 +89,14 @@ export const routeTask = Effect.fn("routeTask")(function* (
     reused?.tier ??
     chooseTier(answers?.complexity, minimum, role === "explore" ? "quick" : "standard", config.routing.confidence)
   const readOnly = role === "analyse" || role === "explore"
-  const tier = readOnly && chosen !== "quick" ? "deep" : chosen
+  const tier = chosen
   const agent =
     role === "plan"
       ? config.agents.plan
       : role === "review"
         ? config.agents.review
         : readOnly
-          ? tier === "quick"
-            ? config.agents.explore
-            : config.agents.plan
+          ? config.agents.explore
           : config.agents[tier]
   const confident = answers && answers.complexity && answers.complexity.confidence >= config.routing.confidence
   return {

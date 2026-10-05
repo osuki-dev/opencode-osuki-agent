@@ -15,6 +15,8 @@ Choose validation by impact. Documentation, cosmetic and mechanical edits usuall
 
 ## Review
 
+Resolve workflow uncertainty with osuki_route role=implement and observed scope/risk evidence before reviewing. role=review checks existing reviewer eligibility; it does not resolve planning or perform a review. Read-only analyse/explore routes use discovery, not the planner. A route recommendation is not a completed child or a review verdict.
+
 For a bounded edit with planning=skip, including one whose initial complexity rating was uncertain, supply osuki_review with the original task, complete task diff including new files, relevant context and concrete check results. Obtain the unified diff from git diff or diff -u, not a handwritten summary. Identify the baseline and pre-existing changes. Do not omit risk to fit the context limit.
 Mark only explicit user or repository checks as `required`. An unavailable optional tool does not require another test when focused evidence already covers the change; an unavailable required check remains a blocker.
 

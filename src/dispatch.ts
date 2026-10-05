@@ -16,13 +16,13 @@ export function dispatchDenial(
     }
   if (
     agent === config.agents.review &&
-    (workflow?.decision.planning === "assess" ||
+    (!workflow || workflow.decision.planning === "assess" ||
       workflow?.decision.planning === "skip") &&
     !workflow?.reviewerRequired
   )
     return {
       event: "reviewer-denied",
       message:
-        "Unresolved routing or an unreviewed diff does not justify the expensive reviewer. With planning=assess, inspect and use osuki_route with evidence. With planning=skip, use osuki_review on the actual diff; escalate only if it returns reviewer-required. Do not retry unchanged evidence."
+        "Unresolved routing or an unreviewed diff does not justify the expensive reviewer. Resolve missing workflow or planning=assess with osuki_route role=implement and observed scope/risk evidence; supply an assessment if Jev is uncertain. With planning=skip, use osuki_review on the actual diff; escalate only if it returns reviewer-required. role=review does not resolve risk or establish a review. Do not retry unchanged evidence."
     }
 }

@@ -185,8 +185,8 @@ test("routing reuses native agents, respects custom names and reports confidence
         tier: "standard"
       })
       expect(yield* routeTask(missing, "Explain a flow", "analyse", config)).toMatchObject({
-        agent: "plan",
-        tier: "deep"
+        agent: "explore",
+        tier: "standard"
       })
       expect(yield* routeTask(missing, "Review", "review", config)).toMatchObject({
         agent: "osuki-reviewer",

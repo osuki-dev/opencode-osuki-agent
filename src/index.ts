@@ -150,7 +150,7 @@ export default {
       editor.add({
         name: "osuki_route",
         description:
-          "Reassess current scope using concrete new evidence, not a relabeled task to bypass routing. planning=skip needs no planner; assess means inspect or clarify, not mandatory planning. If Jev is unavailable or uncertain, supply an assessment with evidence. Explicit goals retain their receipts. Models remain configurable.",
+          "Use role=implement to resolve current workflow scope/risk, with an evidence-backed assessment if Jev is uncertain. planning=skip needs no planner; assess means inspect or clarify. role=review checks existing review eligibility, not risk assessment or review completion. analyse/explore are read-only discovery, not planning. Recommendations use the same gates as native dispatch. Explicit goals retain their receipts. Models remain configurable.",
         input: toolInputSchema(RouteInput),
         execute: Effect.fn("osuki.route")(function* (raw, tool) {
           const input = yield* Schema.decodeUnknownEffect(RouteInput)(raw).pipe(
@@ -158,6 +158,7 @@ export default {
           )
           if (!(yield* isManaged(tool.sessionID, tool.agent)))
             return yield* new ToolFailure({ message: "This tool belongs to an Osuki session" })
+          if (input.role === "review") yield* requireDispatch(tool.sessionID, config.agents.review)
           const workflowRole = input.role === "implement" || input.role === "plan"
           const cached = workflowRole ? sessions.invalidate(tool.sessionID) : sessions.get(tool.sessionID)?.workflow
           const route = yield* routeTask(
@@ -187,12 +188,18 @@ export default {
                 message: "Routing evidence changed while assessing. Reassess the current request."
               })
           }
+          // A recommendation must satisfy the same role gates as native dispatch.
+          yield* requireDispatch(tool.sessionID, route.agent)
+          const resolved = sessions.get(tool.sessionID)?.workflow
           yield* audit(tool.sessionID, {
             request: cached?.request,
             event: "reassessment",
             route,
             jev: yield* jev.status()
           })
+          yield* requireDispatch(tool.sessionID, route.agent)
+          if (resolved && !sessions.canDispatch(tool.sessionID, resolved, route.agent === config.agents.review))
+            return yield* new ToolFailure({ message: "Routing evidence changed. Recheck the current scope." })
           sessions.routed(tool.sessionID, route)
           return { content: JSON.stringify(route) }
         })

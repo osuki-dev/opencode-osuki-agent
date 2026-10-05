@@ -641,6 +641,50 @@ test("initial workflow requests assessment when Jev has no credential", async ()
   )
 })
 
+test("route recommendations and native dispatch share review and planning gates", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness()
+        yield* harness.context({
+          sessionID: "root", agent: "osuki", model: harness.model, tools: {}, system: [],
+          messages: [{ role: "user", content: [{ type: "text", text: "Review the completed update" }] }]
+        })
+        const route = (role: string, planning: string = "skip") => harness.call("osuki_route", {
+          role, task: "Inspect the settled update without editing",
+          assessment: { tier: "standard", planning, evidence: "The settled diff and required validation are available; no design choices remain." }
+        })
+        expect(yield* route("review").pipe(Effect.isFailure)).toBe(true)
+        expect(JSON.parse((yield* harness.status()).content).routing.at(-1).decision.planning).toBe("assess")
+        const analysis = JSON.parse((yield* route("analyse")).content)
+        expect(analysis.agent).toBe("explore")
+        const dispatch = (agent: string) => harness.before({
+          sessionID: "root", agent: "osuki", tool: "subagent",
+          input: { agent, description: "Inspect", prompt: "Inspect read-only" }
+        })
+        yield* dispatch(analysis.agent)
+        expect(yield* route("plan").pipe(Effect.isFailure)).toBe(true)
+        expect(yield* dispatch("plan").pipe(Effect.isFailure)).toBe(true)
+        yield* route("implement")
+        expect(yield* route("review").pipe(Effect.isFailure)).toBe(true)
+        const review = JSON.parse((yield* harness.call("osuki_review", {
+          task: "Review the update", diff: "@@ -1 +1 @@\n-old\n+new", context: "Observed code context. ".repeat(1200),
+          validation: [{ check: "focused checks", result: "passed", evidence: "Existing checks passed for this settled diff" }]
+        })).content)
+        expect(review.outcome).toBe("reviewer-required")
+        const reviewer = JSON.parse((yield* route("review")).content)
+        expect(reviewer.agent).toBe("osuki-reviewer")
+        yield* dispatch(reviewer.agent)
+        const planner = JSON.parse((yield* route("plan", "required")).content)
+        expect(planner.agent).toBe("plan")
+        expect(planner.planning).toBe("required")
+        yield* dispatch(planner.agent)
+        expect(harness.selectedAgents).toEqual(["explore", "osuki-reviewer", "plan"])
+      })
+    )
+  )
+})
+
 test("resolved routing cannot introduce an unapproved planner", async () => {
   const fetch = spyOn(globalThis, "fetch").mockImplementation((async (_url: unknown, init?: RequestInit) => {
     const request = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))
